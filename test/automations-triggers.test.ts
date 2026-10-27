@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
@@ -28,6 +29,11 @@ afterEach(async () => {
 
 async function fixture() {
   const root = await temp('ultimate-triggers-')
+  await mkdir(join(root, 'agents'))
+  await writeFile(
+    join(root, 'agents/ultimate.md'),
+    '---\nname: ultimate\ndescription: Coordinates\nresident: true\n---\nCoordinate the project.\n',
+  )
   const prepared = await prepareHarness({
     ultimateRoot: root,
     userHome: root,
