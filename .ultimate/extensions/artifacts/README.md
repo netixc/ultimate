@@ -37,7 +37,7 @@ Reads use `O_NOFOLLOW`, a regular-file handle, bounded reads, and before/after d
 
 ## Feedback delivery
 
-There are at most 50 notes (4000 characters each), four PNG/JPEG/WebP references totalling 10 MiB, 128-character note/request ids, and bounded target selectors, excerpts and text boundaries. Empty element excerpts are allowed for image/icon targets; text selections require a nonempty quote. The original content hash may differ from the current artifact: feedback about a viewed older snapshot must remain attributable. Original recipient/hash/ids and all images are retained, never silently replaced by the latest artifact.
+There are at most 50 notes (4000 characters each), four PNG/JPEG/WebP references totalling 8 MiB (leaving room for base64 and bounded notes inside the HTTP action limit), 128-character note/request ids, and bounded target selectors, excerpts and text boundaries. Empty element excerpts are allowed for image/icon targets; text selections require a non-whitespace quote. The original content hash may differ from the current artifact: feedback about a viewed older snapshot must remain attributable. Original recipient/hash/ids and all images are retained, never silently replaced by the latest artifact.
 
 `requestId` is scoped to `artifactId`. Identical retries return the saved bundle and one transport receipt; differing normalized payloads fail clearly, including after a save interrupted before the registry commit. The actual route is persisted before each first admission and fixed once admission has a receipt. Missing or concluded recipients initially route to the actual standing `@ultimate` resolved by the Subagents API, not a hard-coded conversation number. Active recipients are addressed directly.
 

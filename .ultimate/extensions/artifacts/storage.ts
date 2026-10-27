@@ -2,6 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, extname, join, resolve, sep } from 'node:path'
+import {
+  FEEDBACK_IMAGE_MAX_BYTES,
+  FEEDBACK_MAX_JSON_BYTES,
+  MAX_ARTIFACT_BYTES,
+  MAX_ARTIFACT_HTML_BYTES,
+} from './types.ts'
 import type {
   Artifact,
   ArtifactAsset,
@@ -126,11 +132,7 @@ function anchor(value: unknown): ArtifactAnchor {
   throw new Error('Invalid anchor kind')
 }
 function imageBytes(base64: unknown) {
-  if (
-    typeof base64 !== 'string' ||
-    base64.length > Math.ceil((10 * MiB) / 3) * 4 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)
-  )
+  if (typeof base64 !== 'string' || base64.length > Math.ceil(FEEDBACK_IMAGE_MAX_BYTES / 3) * 4)
     throw new Error('Invalid image base64')
   const bytes = Buffer.from(base64, 'base64')
   if (!bytes.length || bytes.toString('base64') !== base64) throw new Error('Invalid image base64')
@@ -160,7 +162,7 @@ export function feedbackInput(value: unknown): FeedbackInput {
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(image.mime as string))
       throw new Error('Unsupported reference image MIME')
     total += imageBytes(image.base64).length
-    if (total > 10 * MiB) throw new Error('Reference images exceed 10 MiB')
+    if (total > FEEDBACK_IMAGE_MAX_BYTES) throw new Error('Reference images exceed 8 MiB')
     return {
       name: text(image.name, 'Image name', 200),
       mime: image.mime as FeedbackInput['images'][number]['mime'],
@@ -168,7 +170,7 @@ export function feedbackInput(value: unknown): FeedbackInput {
     }
   })
   if (!notes.length && !images.length) throw new Error('Feedback needs notes or reference images')
-  return {
+  const result: FeedbackInput = {
     artifactId: artifactId(input.artifactId),
     requestId: text(input.requestId, 'Request id', 128),
     contentHash: input.contentHash,
@@ -176,6 +178,9 @@ export function feedbackInput(value: unknown): FeedbackInput {
     notes,
     images,
   }
+  if (Buffer.byteLength(JSON.stringify(result)) > FEEDBACK_MAX_JSON_BYTES)
+    throw new Error('Feedback payload is too large; remove an image or shorten notes')
+  return result
 }
 
 /** Check every descendant and the final file without following symlinks; verify identities after the read. */
@@ -256,17 +261,17 @@ export class ArtifactStorage {
   }
   async capture(workspace: string, input: PublishArtifact) {
     const root = await realpath(workspace)
-    const htmlFile = await sourceFile(root, input.path, 2 * MiB)
+    const htmlFile = await sourceFile(root, input.path, MAX_ARTIFACT_HTML_BYTES)
     const html = htmlFile.bytes
     const files = [htmlFile]
     let total = html.length
     const assets: ArtifactAsset[] = []
     for (const path of input.assets ?? []) {
-      const file = await sourceFile(root, path, 10 * MiB - total)
+      const file = await sourceFile(root, path, MAX_ARTIFACT_BYTES - total)
       files.push(file)
       const bytes = file.bytes
       total += bytes.length
-      if (total > 10 * MiB) throw new Error('Artifact bundle exceeds 10 MiB')
+      if (total > MAX_ARTIFACT_BYTES) throw new Error('Artifact bundle exceeds 10 MiB')
       assets.push({
         path,
         mime: assetMimes[extname(path).toLowerCase()],
@@ -312,12 +317,14 @@ export class ArtifactStorage {
     await this.directory(folder)
     return {
       artifact,
-      html: (await sourceFile(folder, artifact.source.path, 2 * MiB)).bytes.toString('utf8'),
+      html: (
+        await sourceFile(folder, artifact.source.path, MAX_ARTIFACT_HTML_BYTES)
+      ).bytes.toString('utf8'),
       assets: await Promise.all(
         artifact.source.assets.map(async (path) => ({
           path,
           mime: assetMimes[extname(path).toLowerCase()],
-          base64: (await sourceFile(folder, path, 10 * MiB)).bytes.toString('base64'),
+          base64: (await sourceFile(folder, path, MAX_ARTIFACT_BYTES)).bytes.toString('base64'),
         })),
       ),
     }
@@ -351,7 +358,7 @@ export class ArtifactStorage {
       throw new Error('Retained feedback identity conflict')
     for (const [index, path] of this.imagePaths(saved).entries()) {
       if (
-        !(await sourceFile(target, path.split(sep).at(-1)!, 10 * MiB)).bytes.equals(
+        !(await sourceFile(target, path.split(sep).at(-1)!, FEEDBACK_IMAGE_MAX_BYTES)).bytes.equals(
           Buffer.from(saved.images[index].base64, 'base64'),
         )
       )

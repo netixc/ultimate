@@ -1,4 +1,11 @@
-/** Shared local HTML artifact and feedback contract for the native and separate-tab reviewers. */
+/** Shared local HTML artifact and human feedback contract. */
+export const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+export const MAX_ARTIFACT_HTML_BYTES = 2 * 1024 * 1024
+/** Leave room for base64 and bounded notes inside the action endpoint's 12 MiB JSON limit. */
+export const FEEDBACK_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+/** The remaining 1 KiB covers the action envelope and conversation id. */
+export const FEEDBACK_MAX_JSON_BYTES = 12 * 1024 * 1024 - 1024
+
 export type Artifact = {
   id: string
   title: string
