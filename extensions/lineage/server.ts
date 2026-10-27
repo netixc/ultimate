@@ -554,7 +554,8 @@ function lineage(host: ExtensionHost) {
   const ConcludeLanded = defineTask<
     { id: ConversationId; submission: string; lander: number },
     | { phase: 'wait' }
-    | { phase: 'replies'; deliveries: TaskId[]; frontier: { id: ConversationId; after: number }[] }
+    | { phase: 'wait-report'; deliveries: TaskId[] }
+    | { phase: 'replies'; deliveries: TaskId[]; family: ConversationId[]; after: EntryId }
     | { phase: 'conclude' }
     | { phase: 'release' },
     null
@@ -563,7 +564,13 @@ function lineage(host: ExtensionHost) {
     version: 1,
     initial: () => ({ phase: 'wait' }),
     phases: {
-      wait: async (task, runtime, ctx) => {
+      wait: (task, runtime, ctx) =>
+        runtime.commit(async (tx) => {
+          const family = await ownedFamily(tx, task.input.id)
+          const deliveries = (await host.want(LandingReplies)?.admitted(tx, family)) ?? []
+          return { status: 'running', checkpoint: { phase: 'wait-report', deliveries } }
+        }, ctx),
+      'wait-report': async (task, runtime, ctx) => {
         const { id, submission, lander } = task.input
         const report = `lander:${submission}`
         // The lander sends the report before its task moves on: once its conversation is idle without one (an aborted
@@ -571,6 +578,7 @@ function lineage(host: ExtensionHost) {
         // Started only while no report exists, and only ever awaited through Promise.race, which handles its rejection
         // when this task's context is cancelled.
         let landerIdle: Promise<'idle'> | undefined
+        let reportAnswer: EntryId
         for (;;) {
           // Subscribed before reading, so the report's settlement after the read still ends the wait.
           const changed = Promise.withResolvers<void>()
@@ -590,7 +598,12 @@ function lineage(host: ExtensionHost) {
             // Only an answered report concludes: one that ended unanswered (a provider error, a Stop, a reset) left the
             // branch's work unfinished, so it stays open and watchdog's idle-branches note brings it up.
             if (record?.status === 'unanswered') return runtime.commit(() => done, ctx)
-            if (record?.status === 'done') break
+            if (record?.status === 'done' && record.type === 'input') {
+              // IDs share one allocation order: later inputs must be accounted for even if their runs
+              // finish (or fail) before waitForIdle returns or this task resumes after a restart.
+              reportAnswer = record.answer
+              break
+            }
             // Admitted, the report settles on its own; before that, the lander going idle means none is coming.
             const woke = await awaitWithContext(
               record
@@ -619,23 +632,17 @@ function lineage(host: ExtensionHost) {
         // The report starts a run (the branch tells @ultimate it landed); wait for it and its foreground subagents.
         await (await runtime.conversation(id, ctx))?.waitForIdle(ctx)
         await runtime.commit(async (tx) => {
-          const frontier: { id: ConversationId; after: number }[] = []
-          const family = [id]
-          for (const member of family) {
-            const latest = (await tx.scanEntries({ conversationId: member }, 1)).items[0]
-            frontier.push({ id: member, after: latest?.id ?? 0 })
-            for (const child of Object.values((await tx.doc(Subagents, member)).agents))
-              family.push(child.conversationId)
+          const family = await ownedFamily(tx, id)
+          const { deliveries } = task.state.checkpoint
+          return {
+            status: 'running',
+            checkpoint: { phase: 'replies', deliveries, family, after: reportAnswer },
           }
-          const deliveries = (await host.want(LandingReplies)?.admitted(tx, family)) ?? []
-          return deliveries.length
-            ? { status: 'running', checkpoint: { phase: 'replies', deliveries, frontier } }
-            : { status: 'running', checkpoint: { phase: 'conclude' } }
         }, ctx)
       },
       replies: async (task, runtime, ctx) => {
-        const { deliveries, frontier } = task.state.checkpoint
-        const family = new Set(frontier.map((member) => member.id))
+        const { deliveries, family: members, after } = task.state.checkpoint
+        const family = new Set(members)
         for (;;) {
           const changed = Promise.withResolvers<void>()
           // Pi task/submission receipts, not domain events. Subscribe before the transactional check.
@@ -664,11 +671,11 @@ function lineage(host: ExtensionHost) {
               // Only this admitted chain may extend the boundary. A genuinely new input keeps the branch
               // open even if its run finished while transport was draining; notes never count as inputs.
               const allowed = new Set(replies?.entries ?? [])
-              for (const member of frontier) {
+              for (const member of family) {
                 let cursor: Cursor | undefined
                 do {
                   const page = await tx.scanEntries(
-                    { conversationId: member.id, minEntryId: (member.after + 1) as EntryId },
+                    { conversationId: member, minEntryId: (after + 1) as EntryId },
                     200,
                     cursor,
                   )
@@ -698,6 +705,13 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
+  async function ownedFamily(tx: Tx, id: ConversationId) {
+    const family = [id]
+    for (const member of family)
+      for (const child of Object.values((await tx.doc(Subagents, member)).agents))
+        family.push(child.conversationId)
+    return family
+  }
   async function concludeLanded(tx: Tx, id: ConversationId) {
     if (await keepsWorking(tx, id)) return done
     try {

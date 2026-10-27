@@ -67,9 +67,10 @@ document, tools and model-facing text, where agents and stored entries already u
   once, placing the note in a tally inside its own transaction, or, for a root that is no tally yet, creating a
   `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
   reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
-  waits for the lander's report (`lander:<submission>`) to be answered and the submitter to go idle. It then freezes
-  already admitted reply deliveries within the branch's owned tree, through the `lineage.landing-replies` point that
-  messages fills. Their durable callback addresses, child answers and exact parent report receipts must settle before
+  first freezes already admitted reply deliveries within the branch's owned tree, through the
+  `lineage.landing-replies` point that messages fills, then waits for the lander's report (`lander:<submission>`) to be
+  answered and the submitter to go idle. The early snapshot retains failures that occur while the report is running.
+  Their durable callback addresses, child answers and exact parent report receipts must settle before
   closing; subagents admits any missing recovery Reporter in that same check, so an idle child alone is not proof.
   New inputs outside those receipts leave the branch open, as do unanswered callbacks, open outgoing questions,
   queued input or still-running subagents. The final receipt/input check, `ConversationsApi.concludeIn` and the task's

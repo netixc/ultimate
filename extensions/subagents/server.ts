@@ -666,12 +666,16 @@ export default function subagents(
       const reporters = Object.values((await tx.doc(Subagents, parent)).actions).filter(
         (action) => action.answer === submission.answer,
       )
+      // Coalesced inputs may share an answer: a deduplicated Reporter completes without a report,
+      // while the one that claimed the answer still delivers it. Only all-ended reporters prove failure.
       for (const action of reporters) {
         const reporter = await tx.task(action.reporter)
-        if (!reporter || reporter.state.status === 'terminal')
-          return { state: 'unanswered', entries }
+        if (reporter && reporter.state.status !== 'terminal') return { state: 'pending', entries }
       }
-      return { state: 'pending', entries }
+      return {
+        state: reporters.length ? 'unanswered' : 'pending',
+        entries,
+      }
     },
     async replies(tx, parent, children) {
       const state = await tx.doc(Subagents, parent)
