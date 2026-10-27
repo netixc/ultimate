@@ -1,5 +1,15 @@
 import { existsSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { setImmediate as yieldIO } from 'node:timers/promises'
 import { join, resolve, sep } from 'node:path'
@@ -108,7 +118,7 @@ export async function removeTemp(path: string) {
   await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {})
 }
 export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
-  const path = await mkdtemp(join(parent, prefix))
+  const path = await realpath(await mkdtemp(join(parent, prefix)))
   temps.add(path)
   return path
 }
