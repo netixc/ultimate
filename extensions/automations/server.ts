@@ -127,7 +127,6 @@ function backend(host: ExtensionHost) {
   } = scripts
   async function prepareScript(args: Args, caller?: number): Promise<Prepared> {
     if (args.action === 'create') {
-      if (!caller) throw new Error('create requires a caller conversation')
       if (args.scope !== 'project') {
         if (args.slug !== undefined) throw new Error('slug is only for project automations')
         return await agentFor(caller)
@@ -366,8 +365,11 @@ function backend(host: ExtensionHost) {
         throw new Error('Project scope is only supported for script triggers')
       if (args.slug !== undefined && args.scope !== 'project')
         throw new Error('slug is only for project automations')
-      if (args.schedule !== undefined) parseSchedule(args.schedule)
-      if (args.ask !== undefined) required(args.ask, 'ask')
+      if (args.schedule !== undefined) nextAt(parseSchedule(args.schedule), Date.now())
+      if (args.ask !== undefined) {
+        required(args.ask, 'ask')
+        if (!caller) throw new Error('create requires a caller conversation')
+      }
       if (!args.prompt && !args.subscribers?.length && !caller)
         throw new Error('At least one of prompt or subscribers is required')
       if (
@@ -398,8 +400,22 @@ function backend(host: ExtensionHost) {
         throw new Error('cooldownMs must be non-negative')
       if (c.idleFor !== undefined && (!Number.isFinite(c.idleFor) || c.idleFor < 0))
         throw new Error('idleFor must be non-negative')
-      const target = typeof c.of === 'string' ? await trigger.resolve(c.of) : undefined
-      if (!target || !(await host.harness().conversation(target, BACKGROUND_CONTEXT)))
+      const of = typeof c.of === 'string' ? c.of : ''
+      if (/^@[a-zA-Z0-9_-]+$/.test(of)) {
+        const { definitions } = await discoverAgents(
+          host.ultimateRoot,
+          host.projectRoot,
+          host.userHome,
+          host.modelRuntime,
+        )
+        if (!definitions.some((d) => d.name === of.slice(1) && d.resident))
+          throw new Error(`Unknown of: ${c.of}`)
+      } else if (
+        !/^#[1-9]\d*$/.test(of) ||
+        !(await host
+          .harness()
+          .conversation(Number(of.slice(1)) as ConversationId, BACKGROUND_CONTEXT))
+      )
         throw new Error(`Unknown of: ${c.of}`)
     }
     if (args.name !== undefined) required(args.name, 'name')
@@ -611,7 +627,7 @@ function backend(host: ExtensionHost) {
       0
     )
   }
-  return { ...schedule, ...scripts, prepare, change, apply, operate, trigger }
+  return { ...schedule, ...scripts, validate, prepare, change, apply, operate, trigger }
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
@@ -700,6 +716,7 @@ export default function automations(host: ExtensionHost) {
   host.need(MessagesApi)
   const api = backend(host)
   host.implement(AutomationsApi, {
+    validateCreate: (args) => api.validate({ ...args, action: 'create' }),
     create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,
     delete: async (id) => void (await api.operate({ action: 'delete', id })),
     resume: async (id) => (await api.operate({ action: 'resume', id }), api.status(id)),

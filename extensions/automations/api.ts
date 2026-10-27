@@ -3,6 +3,11 @@ import type { Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { Automation, AutomationListItem, CreateArgs } from './types.ts'
 export type AutomationsService = {
+  /**
+   * Check create arguments without writes, tasks or standing-agent resolution. Shares create's validation;
+   * create remains authoritative. Script triggers require a caller and are not supported by this service.
+   */
+  validateCreate(args: CreateArgs): Promise<void>
   /** Create an automation as the tool's create does; `subscribers` stand in for a caller. Commits. */
   create(args: CreateArgs): Promise<Automation>
   /** Delete a record, retiring its scheduler; files and conversations remain. Commits. */
