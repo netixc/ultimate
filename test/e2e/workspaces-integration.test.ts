@@ -1478,28 +1478,26 @@ it.concurrent('delivers a message to a resumed branch whose checkout conclude re
   expect((await f.service.get(id, context))?.state).toBe('ready')
   await access(path)
 })
-it.concurrent('answers input from the report run before concluding', async () => {
+it.concurrent('answers new input queued during the report run and leaves the branch open', async () => {
   const { f, id, concluded, release } = await concluding()
-  // What the conclusion's own transaction sees of the user's input.
-  const seen: (string | undefined)[] = []
-  concluded.mockImplementation(async (tx, ids) => {
-    seen.push((await tx.submissionByRequest(id, 'user-late'))?.status)
-    await concludeIn(f.host, tx, ids)
-  })
+  f.prepared.faux!.appendResponses([() => fauxAssistantMessage('Answered the new work.')])
   await f.service.submit(id, 'None', context)
   await until(async () => !!(await f.opened.harness.snapshot(LiveDoc, id, context))?.run)
-  // The user writes while the report run is going: the follow-up runs before the branch counts as idle.
+  // A user follow-up is new work outside the landing report's admitted reply chain.
   const conversation = (await f.opened.harness.conversation(id, context))!
   await conversation.submit(
     { type: 'input', content: 'one more thing', whenBusy: 'followUp', requestId: 'user-late' },
     context,
   )
   release()
-  await until(async () => (await concludedIds(f)).includes(id))
-  // Settled before the conclusion: answered alone, or joined into the report's run (Pi records that as unanswered).
-  expect(seen).toHaveLength(1)
-  expect(['done', 'unanswered']).toContain(seen[0])
+  await conversation.waitForIdle(context)
+  expect(
+    await f.opened.harness.commit((tx) => tx.submissionByRequest(id, 'user-late'), context),
+  ).toMatchObject({ status: 'done' })
   await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
+  expect(concluded).not.toHaveBeenCalled()
+  expect(await concludedIds(f)).not.toContain(id)
+  expect((await f.service.get(id, context))?.state).toBe('ready')
 })
 it('leaves a landed branch open while it waits on a reply it asked for', async () => {
   const { f, id, concluded, release } = await concluding()
