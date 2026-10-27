@@ -18,7 +18,6 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
-  UsageDoc,
 } from '@earendil-works/pi-durable'
 import type {
   CompactionResult,
@@ -41,6 +40,7 @@ import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
+import type { ResponseReceipt } from '../conversations/summary.ts'
 import { Standing, Started, Subagents } from '../subagents/api.ts'
 
 /** The fields of a message the landed-branch check reads. */
@@ -158,8 +158,7 @@ export function sourceText(
 /** Ask `model` once with a system prompt and one user message; returns the text, or throws on a failed answer. */
 async function ask(
   models: Models,
-  tx: (change: (tx: Tx) => Promise<void>) => Promise<void>,
-  usageConversation: ConversationId,
+  account: (response: ResponseReceipt) => Promise<void>,
   ref: ModelRef,
   thinking: ModelThinkingLevel | undefined,
   systemPrompt: string,
@@ -177,16 +176,14 @@ async function ask(
       signal,
     },
   )
-  await tx(async (draft) => {
-    const usage = (await draft.doc(UsageDoc, usageConversation)).models
-    const key = `${answer.provider}/${answer.model}`
-    const total = Object.hasOwn(usage, key) ? usage[key] : undefined
-    if (!total) usage[key] = answer.usage
-    else
-      for (const counter of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const)
-        total[counter] += answer.usage[counter]
-  })
   const result = contentText(answer.content).trim()
+  await account({
+    provider: answer.provider,
+    model: answer.model,
+    usage: answer.usage,
+    text: result,
+    stopReason: answer.stopReason,
+  })
   if (answer.stopReason !== 'stop' && answer.stopReason !== 'length')
     throw new Error(answer.errorMessage ?? `The model stopped: ${answer.stopReason}`)
   if (!result) throw new Error('The model returned no answer')
@@ -1542,8 +1539,13 @@ export default function lineageExtension(host: ExtensionHost) {
             const brief = await standingBrief(api.conversationId, ctx)
             const answer = await ask(
               api.models,
-              (change) => host.harness().commit(change, ctx),
-              api.conversationId,
+              (response) =>
+                host
+                  .harness()
+                  .commit(
+                    (tx) => conversations.accountResponse(tx, api.conversationId, response),
+                    ctx,
+                  ),
               agent.model,
               agent.thinkingLevel,
               COMPACT_SYSTEM,

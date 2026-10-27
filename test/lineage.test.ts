@@ -1,4 +1,6 @@
-import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { LiveDoc, ROOT_CONVERSATION_ID, UsageDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import { compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
@@ -571,6 +573,82 @@ it.concurrent('defaults a branch to its source’s configuration', async () => {
   const followed = await branchFrom(server, { from: other.id, prompt: 'Follow B', isolated: false })
   expect(await agentOf(followed)).toMatchObject({ model, thinkingLevel: 'high' })
   await settled(server, followed)
+})
+
+it.concurrent('adds compaction costs and supplemental usage to an existing model ledger', async () => {
+  const { server } = await fixture()
+  const reported = {
+    input: 10,
+    output: 20,
+    cacheRead: 30,
+    cacheWrite: 40,
+    totalTokens: 100,
+    reasoning: 5,
+    cacheWrite1h: 6,
+    cost: { input: 0.125, output: 0.25, cacheRead: 0.5, cacheWrite: 1, total: 1.875 },
+  }
+  let requests = 0
+  // Faux normally estimates usage; return the provider's explicit receipt instead.
+  server.host.modelRuntime.registerNativeProvider({
+    ...server.host.faux!.provider,
+    streamSimple(model, transcript) {
+      requests++
+      expect(textOf(transcript.messages[0].content)).toContain('You condense')
+      const stream = createAssistantMessageEventStream()
+      const answer = {
+        ...fauxAssistantMessage('Compacted work.'),
+        provider: model.provider,
+        model: model.id,
+        api: model.api,
+        usage: reported,
+      }
+      queueMicrotask(() => {
+        stream.push({ type: 'done', reason: 'stop', message: answer })
+        stream.end(answer)
+      })
+      return stream
+    },
+  })
+  const id = server.root.id
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(UsageDoc, id)).models['faux/faux-1'] = {
+      input: 100,
+      output: 200,
+      cacheRead: 300,
+      cacheWrite: 400,
+      totalTokens: 1000,
+      reasoning: 50,
+      cacheWrite1h: 60,
+      cost: { input: 1, output: 2, cacheRead: 4, cacheWrite: 8, total: 15 },
+    }
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+
+  const task = await server.harness.waitForTask(
+    await server.root.compact(undefined, context),
+    context,
+  )
+  expect(task.state.outcome.status).toBe('completed')
+  expect(textOf((await server.root.context(context)).entries[0].model?.[0]?.content)).toContain(
+    'Compacted work.',
+  )
+  expect(requests).toBe(1)
+  expect((await server.harness.snapshot(UsageDoc, id, context))?.models).toEqual({
+    'faux/faux-1': {
+      input: 110,
+      output: 220,
+      cacheRead: 330,
+      cacheWrite: 440,
+      totalTokens: 1100,
+      reasoning: 55,
+      cacheWrite1h: 66,
+      cost: { input: 1.125, output: 2.25, cacheRead: 4.5, cacheWrite: 9, total: 16.875 },
+    },
+  })
 })
 
 it.concurrent('resolves the root per tree for notes, the prompt and compaction', async () => {
