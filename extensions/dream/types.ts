@@ -7,7 +7,7 @@ import type { Journal, Proposal, Session, Waiting } from './refs.ts'
 
 /** Everything a dream carries to a fresh chapter; numeric trigger targets and subscribers need recreating. */
 export type Seed = {
-  /** Written only by the gate: the preview checks automations' schedules instead of creating them. */
+  /** Written only by the gate: the preview validates carried automations instead of creating them. */
   gate?: true
   from: { name: string; number: number }
   session: number

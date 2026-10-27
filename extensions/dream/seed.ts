@@ -10,6 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
+import { AutomationsApi } from '../automations/api.ts'
 import { BuiltInDoc, compactionSummary, PauseDoc } from './before-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
@@ -291,9 +292,8 @@ export async function applySeed(host: ExtensionHost) {
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     if (seed.gate) {
-      // The gate's preview runs against the real project: it checks each schedule but creates nothing that could fire.
-      if (automation.schedule)
-        await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
+      // The gate checks the same inputs as create, without preparing a target or creating anything that could fire.
+      await host.need(AutomationsApi).validateCreate(automation)
     } else {
       // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
       // A rediscovered project script may share the name: only a carried trigger counts as the lost create.

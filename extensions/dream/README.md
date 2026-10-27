@@ -116,7 +116,7 @@ made active again (`lib/chapters.ts`).
 (slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
 and scripts, with counts for the later gate. The built-in Dream before compaction automation is not among them: the seed
 says only whether it was enabled (`builtIn`), and the new chapter makes its own. Conversation docs are read through the host's exported tokens;
-both trigger kinds are read through the single automations list action. Enabled schedule records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a chapter. Schedules without a prompt become recreation to-dos.
+both trigger kinds are read through the single automations list action. Enabled triggers keep their name, optional prompt, trigger and run profile, but no subscribers: old conversation targets need choosing again in the new chapter. Triggers without a prompt and numeric context targets become recreation to-dos. Numeric event conversation filters (`conversations.compacted.where.conversation` and `workspaces.landed.where.conversationId`) also become recreation to-dos retaining the original filter, except fixed root 1, which stays valid. Named standing targets, global events and other numeric fields remain carried.
 
 On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep
 their sources, to-dos get fresh ids, questions become user-owned to-dos naming the old chapter and message id, and a
@@ -140,7 +140,7 @@ changes are serialized. Each progress update commits separately on the session a
 
 The gate writes a real seed and switch journal in a temporary home, starts it through optional `InstanceApi`, and
 reads its HTTP actions without a model: root memories, open to-dos (including questions and user scripts),
-automations, @ultimate's `dream.chapter` entry, and the memory brief's tokens. Passive delivery gets up to ten
+automation validation receipts, @ultimate's `dream.chapter` entry, and the memory brief's tokens. Each carried trigger uses the automation service's shared create validation without creating records, tasks, scripts or standing conversations. Missing run profiles, explicit models, events and context targets fail the gate; actual creation validates again because configuration can change afterwards. Passive delivery gets up to ten
 seconds to settle. Lineage only publishes `briefTokens` once a root has branched, so the gate uses `estimateTextTokens`
 on the fresh root's index and read instructions (the `memoryBrief` format, with no recent landings); a regression test
 compares the formats. Memory briefs have no lineage cap, so the gate uses **6000 tokens**, matching lineage's tally
