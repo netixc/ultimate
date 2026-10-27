@@ -188,30 +188,37 @@ export const actions = {
  */
 async function conclude(host: ExtensionHost, ids: ConversationId[], from?: number) {
   const harness = host.harness()
-  const { tree, inside } = await harness.commit(async (tx) => {
+  const trees = await harness.commit(async (tx) => {
     await concludeIn(host, tx, ids)
-    const owned = await ownedTree(tx, ids)
-    return { tree: owned, inside: from !== undefined && owned.has(from as ConversationId) }
+    return ownedTrees(tx, ids)
   }, context)
+  const tree = [...trees.values()].flatMap((owned) => [...owned])
+  const abortable = [...trees].filter(
+    ([, owned]) => from === undefined || !owned.has(from as ConversationId),
+  )
   const stopped: number[] = []
-  if (!inside) {
+  if (abortable.length) {
     const busy = new Set(
       (await harness.inspect(context)).tasks.flatMap(({ record: task }) =>
         task.conversationId !== undefined && !task.background ? [task.conversationId] : [],
       ),
     )
-    stopped.push(...[...tree].filter((id) => busy.has(id)).toSorted((a, b) => a - b))
+    stopped.push(
+      ...abortable
+        .flatMap(([, owned]) => [...owned].filter((id) => busy.has(id)))
+        .toSorted((a, b) => a - b),
+    )
     // Background too: a subagent hangs off a background anchor, and its reporter is background work.
-    for (const id of ids)
+    for (const [id] of abortable)
       await (await harness.conversation(id, context))?.abort(context, { background: true })
   }
-  const previews = (await host.want(Previews)?.stop([...tree], context)) ?? []
+  const previews = (await host.want(Previews)?.stop(tree, context)) ?? []
   const kept = (await host.want(Release)?.release(ids, context)) ?? []
   return { concluded: ids, stopped, previews, kept }
 }
-/** `ids` and every conversation they own, transitively (subagents and theirs). */
-async function ownedTree(tx: Tx, ids: ConversationId[]) {
-  const tree = new Set(ids)
+/** Each selected conversation and every conversation it owns, transitively (subagents and theirs). */
+async function ownedTrees(tx: Tx, ids: ConversationId[]) {
+  const trees = new Map(ids.map((id) => [id, new Set([id])]))
   const owners = new Map<ConversationId, ConversationId>()
   let cursor: Cursor | undefined
   do {
@@ -222,14 +229,15 @@ async function ownedTree(tx: Tx, ids: ConversationId[]) {
   for (const id of owners.keys()) {
     const chain: ConversationId[] = []
     for (let at: ConversationId | undefined = id; at !== undefined; at = owners.get(at)) {
-      if (tree.has(at)) {
+      const tree = trees.get(at)
+      if (tree) {
         for (const below of chain) tree.add(below)
         break
       }
       chain.push(at)
     }
   }
-  return tree
+  return trees
 }
 /** Add top-level conversations `ids` to the concluded list inside `tx`; throws for unknown, owned or fixed ones. */
 export async function concludeIn(host: Pick<ExtensionHost, 'doc'>, tx: Tx, ids: ConversationId[]) {

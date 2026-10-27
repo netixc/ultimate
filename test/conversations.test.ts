@@ -677,6 +677,55 @@ it.concurrent('concluding a busy conversation stops it and the subagents it runs
   expect(live).toEqual([])
 })
 
+it.concurrent('self-conclusion still stops unrelated trees in the same batch', async () => {
+  const { server, create } = await launch()
+  const self = await create()
+  const other = await create()
+  server.host.faux!.setResponses([
+    fauxAssistantMessage(
+      [
+        fauxToolCall('subagent', {
+          action: 'start',
+          agent: 'worker',
+          isolate: 'none',
+          background: true,
+          task: 'Keep working.',
+        }),
+      ],
+      { stopReason: 'toolUse' },
+    ),
+    held,
+    held,
+    held,
+  ])
+  const running = async (id: number) =>
+    (await server.harness.snapshot(LiveDoc, id as ConversationId, context))?.run
+  const child = () =>
+    server.api.conversations().find((item) => item.parentConversationId === other)?.id ?? 0
+  await post(server, `/api/conversations/${other}/submit`, { text: 'start a worker' })
+  await until(async () => Boolean(child() && (await running(child())) && (await running(other))))
+  await post(server, `/api/conversations/${self}/submit`, { text: 'keep working too' })
+  await until(async () => Boolean(await running(self)))
+
+  // An agent's action carries its conversation id, without a browser device.
+  const result = await server.extensions.invoke(
+    'conversations',
+    'conclude',
+    { ids: [self, other] },
+    new AbortController().signal,
+    self,
+    'agent',
+  )
+  expect(result).toMatchObject({
+    concluded: [self, other],
+    stopped: [other, child()],
+    previews: [],
+  })
+  expect(await running(self)).toBeDefined()
+  expect(await running(other)).toBeUndefined()
+  expect(await running(child())).toBeUndefined()
+})
+
 it.concurrent('refuses to conclude a root or a standing agent', async () => {
   const { server, create, action } = await launch()
   const ultimate = (
