@@ -33,6 +33,16 @@ sending states (side-chat forks @ultimate this way). Only the shown conversation
 (Escape, Shift+Tab); a scoped one does not.
 `switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
+For uploaded files, wrap `core` in `<ComposerAttachmentAdapter submit={submit}>`. Its callback receives the
+conversation's text, images, attachment metadata, queue mode and retry key, plus `fallback()` for ordinary core
+submission. It runs inside the existing send/failure handling; it must resolve only once input is durably admitted.
+Composer slots call `useComposerAttachments()` to read and synchronously update that draft. Use `update(current =>
+({ images, attachments }))` to reserve a picker batch or convert an image reservation atomically. Setters stay bound
+to the original draft across navigation, enforce four attachments and 10 MiB combined, and persist metadata only
+(never `File` or upload bytes). Uploading/error attachments block Send; successful submission clears only its own
+snapshot. Unfinished restored uploads need the file chosen again. `UserView` accepts attachment `children` and
+`actionText` to preserve the original copy/recall text while displaying chips.
+
 Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to render another live conversation without
 switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
 `useIntro`, `useCompact`/`useCompactQuiet`, and `useAction` follow the nearest scope, as do transcript/composer
@@ -99,6 +109,12 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
+- `submit(conversationId, request, { context, device? })`: submit typed user input from a trusted server extension through
+  the core HTTP submit path's validation, skill expansion and `user.input` event. `request` is `SubmitRequest` from
+  `shared/protocol.ts`; `context` is a Chord context and `device` is the action's optional `ctx.device`. Returns
+  `SubmitResponse` (`{ submissionId }`) after admission, not after the agent finishes. An optional non-empty
+  `request.requestId` (at most 128 characters) gives Pi's conversation-scoped idempotent receipt on retries; each
+  call still records a `user.input` event. This adds no public route or admission bypass for HTTP callers.
 - `provide(name, value)`, `use<T>(name)`: publish and look up typed process-local behaviour. Import the provider's contract with `import type`, never its implementation. Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a missing provider returns `undefined`. Look up at call time rather than retaining a provider across reloads. A failed replacement keeps the old provider. For example, workspaces provides `WorkspaceService` under `workspaces`; lineage provides `LineageService` under `lineage`. Shared branches and landings work without the other extension; isolated branches require workspaces.
 - `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
@@ -324,6 +340,7 @@ title bar the host shows above every surface.
 | `composer.toolbar`     | Left of the composer's footer; a size container, condense with `@max-md:` (`<Conversation />`)               |
 | `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)                     |
 | `composer.actions`     | Composer footer, beside Send; input helpers that write into the draft with `insertIntoComposer`              |
+| `composer.attachments` | Above the editor, below image previews; attachment chips using `useComposerAttachments()`                    |
 | `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`                    |
 | `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside                    |
 | `transcript.end`       | After a transcript's last row, before the working line: a turn still forming, such as live speech            |
@@ -658,6 +675,10 @@ export const userActions = ['decide']
 ```
 
 Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+
+A facet may also export `sealedActions: string[]` to keep named actions' arguments and results out of the call
+trace. Every name must refer to a registered action, as with `userActions`. This does not hide thrown error messages:
+these actions must sanitize their own errors, and any nested service calls are traced independently.
 
 Likewise `pollActions: string[]` names read-only actions a surface polls with changing arguments (cursors, windows):
 the call trace counts their successful calls in `host.trace.polls()` instead of writing them, with the plain action

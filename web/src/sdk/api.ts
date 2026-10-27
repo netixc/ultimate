@@ -93,11 +93,13 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
       whenBusy?: SubmitRequest['whenBusy'],
       id?: number,
       images?: SubmitRequest['images'],
+      requestId?: string,
     ) =>
       post<SubmitResponse>(conversation(id, 'submit'), {
         text,
         whenBusy,
         images,
+        requestId,
       } satisfies SubmitRequest),
     /** Stored entries of `id` below `before`, newest first; with `after`, only those from `after` on, in larger pages. */
     history: async (

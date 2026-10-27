@@ -73,6 +73,14 @@ import { registry, store } from '../../web/src/sdk/client.ts'
 import { ConversationScope } from '../../web/src/sdk/conversation-scope.tsx'
 import { Conversation } from '../../web/src/app/primitives.tsx'
 import {
+  ComposerAttachmentAdapter,
+  useComposerAttachments,
+} from '../../web/src/sdk/composer-attachments.tsx'
+import type {
+  ComposerAttachmentController,
+  ComposerSubmission,
+} from '../../web/src/sdk/composer-attachments.tsx'
+import {
   getConversation,
   TranscriptContext,
   useAction,
@@ -262,10 +270,12 @@ it('renders <ConversationScope><Conversation/></ConversationScope> and sends, st
   render()
   harness.submit!()
   await tick()
-  expect(harness.fetch).toHaveBeenLastCalledWith(
-    '/api/conversations/17/submit',
-    expect.objectContaining({ body: JSON.stringify({ text: 'hello side', images: [] }) }),
-  )
+  expect(harness.fetch).toHaveBeenLastCalledWith('/api/conversations/17/submit', expect.anything())
+  expect(JSON.parse(harness.fetch.mock.lastCall![1]!.body as string)).toEqual({
+    text: 'hello side',
+    images: [],
+    requestId: expect.any(String),
+  })
 
   source(17).send('view', view(17, 'side transcript', true))
   html = render()
@@ -283,12 +293,13 @@ it('renders <ConversationScope><Conversation/></ConversationScope> and sends, st
   // A steer behind the queued one withdraws it and sends both as one.
   const calls = harness.fetch.mock.calls.map(([path]) => path)
   expect(calls.at(-2)).toBe('/api/conversations/17/inbox/1700/cancel')
-  expect(harness.fetch).toHaveBeenLastCalledWith(
-    '/api/conversations/17/submit',
-    expect.objectContaining({
-      body: JSON.stringify({ text: 'queued 17\nsteer side', whenBusy: 'steer', images: [] }),
-    }),
-  )
+  expect(harness.fetch).toHaveBeenLastCalledWith('/api/conversations/17/submit', expect.anything())
+  expect(JSON.parse(harness.fetch.mock.lastCall![1]!.body as string)).toEqual({
+    text: 'queued 17\nsteer side',
+    whenBusy: 'steer',
+    images: [],
+    requestId: expect.any(String),
+  })
   harness.change!({ target: { value: 'follow side' } })
   render()
   harness.keyDown!({
@@ -299,12 +310,13 @@ it('renders <ConversationScope><Conversation/></ConversationScope> and sends, st
     preventDefault() {},
   })
   await tick()
-  expect(harness.fetch).toHaveBeenLastCalledWith(
-    '/api/conversations/17/submit',
-    expect.objectContaining({
-      body: JSON.stringify({ text: 'follow side', whenBusy: 'followUp', images: [] }),
-    }),
-  )
+  expect(harness.fetch).toHaveBeenLastCalledWith('/api/conversations/17/submit', expect.anything())
+  expect(JSON.parse(harness.fetch.mock.lastCall![1]!.body as string)).toEqual({
+    text: 'follow side',
+    whenBusy: 'followUp',
+    images: [],
+    requestId: expect.any(String),
+  })
   render()
   harness.stop!()
   await tick()
@@ -331,6 +343,241 @@ it('adds a view to a document-only stream and keeps documents after the scope re
   expect(store.getState().viewsOf[23]).toBeUndefined()
   both.send('docOps', { kind: counter.kind, ops: [['s', ['n'], 3]] })
   expect(store.getState().docsOf[23]?.[counter.kind]).toEqual({ n: 3 })
+})
+
+it('keeps uploading and failed attachments in their draft, blocks send, and clears only the accepted draft', async () => {
+  const controllers = new Map<number, ComposerAttachmentController>()
+  const submit = vi.fn<(input: ComposerSubmission) => Promise<unknown>>()
+  submit
+    .mockRejectedValueOnce(new Error('Upload submission failed'))
+    .mockResolvedValue({ submissionId: 1 })
+  await registry.setLoaders({
+    '/extensions/attachments/web.tsx': async () => ({
+      default: {
+        composer: ({ core }: { core: ReactNode }) =>
+          h(ComposerAttachmentAdapter, { submit, children: core }),
+        slots: {
+          'composer.attachments': () => {
+            const controller = useComposerAttachments()
+            controllers.set(controller.conversationId!, controller)
+            return h('output', null, controller.attachments.map((item) => item.name).join(', '))
+          },
+        },
+      },
+    }),
+  })
+  for (const id of [31, 33]) effects.push(store.watchConversation(id))
+  await tick()
+  for (const id of [31, 33])
+    source(id).send('view', {
+      ...view(id, 'conversation'),
+      docs: { ...view(id, 'conversation').docs, 'pi.inbox': { items: [] } },
+    })
+  const render = (id: number) => renderToStaticMarkup(scoped(id, h(Conversation)))
+  render(31)
+  const first = controllers.get(31)!
+  first.setAttachments(() => [{ id: 'upload', name: 'notes.txt', size: 12, status: 'uploading' }])
+  render(31)
+  harness.submit!()
+  await tick()
+  expect(submit).not.toHaveBeenCalled()
+  render(33)
+  const second = controllers.get(33)!
+  second.setAttachments(() => [{ id: 'other', name: 'other.txt', size: 2, status: 'ready' }])
+  // An upload finishing after navigation still updates the first draft, not the new editor.
+  first.setAttachments((files) => files.map((file) => ({ ...file, status: 'ready' })))
+  expect(render(31)).toContain('notes.txt')
+  harness.submit!()
+  await tick()
+  expect(render(31)).toContain('Upload submission failed')
+  expect(controllers.get(31)!.attachments[0].id).toBe('upload')
+  const failedId = submit.mock.calls[0][0].requestId
+  harness.submit!()
+  await tick()
+  expect(submit.mock.calls[1][0].requestId).toBe(failedId)
+  render(31)
+  expect(controllers.get(31)!.attachments).toEqual([])
+  render(33)
+  expect(controllers.get(33)!.attachments[0].id).toBe('other')
+})
+
+it('replaces a failed attempt when attachments are removed without editing the text', async () => {
+  let controller: ComposerAttachmentController
+  const submit = vi
+    .fn<(input: ComposerSubmission) => Promise<unknown>>()
+    .mockRejectedValueOnce(new Error('Send failed'))
+    .mockResolvedValue({ submissionId: 1 })
+  await registry.setLoaders({
+    '/extensions/removal/web.tsx': async () => ({
+      default: {
+        composer: ({ core }: { core: ReactNode }) =>
+          h(ComposerAttachmentAdapter, { submit, children: core }),
+        slots: {
+          'composer.attachments': () => {
+            controller = useComposerAttachments()
+            return null
+          },
+        },
+      },
+    }),
+  })
+  effects.push(store.watchConversation(49))
+  await tick()
+  const snapshot = view(49, 'conversation')
+  source(49).send('view', { ...snapshot, docs: { ...snapshot.docs, 'pi.inbox': { items: [] } } })
+  const render = () => renderToStaticMarkup(scoped(49, h(Conversation)))
+  render()
+  controller!.setAttachments(() => [
+    { id: 'removed', name: 'notes.txt', size: 12, status: 'ready' },
+  ])
+  controller!.setImages(() => [{ data: 'eA==', mimeType: 'image/png' }])
+  harness.change!({ target: { value: 'Keep only this text' } })
+  render()
+  harness.submit!()
+  await tick()
+  render()
+  controller!.setAttachments(() => [])
+  controller!.setImages(() => [])
+  render()
+  harness.submit!()
+  await tick()
+  const [first, second] = submit.mock.calls.map(([input]) => input)
+  expect(second.text).toBe(first.text)
+  expect(second.attachments).toEqual([])
+  expect(second.images).toEqual([])
+  expect(second.requestId).not.toBe(first.requestId)
+})
+
+it.each([false, true])(
+  'retries the exact uncertain steer without withdrawing its accepted inbox item (merged: %s)',
+  async (merged) => {
+    const id = merged ? 45 : 43
+    let controller: ComposerAttachmentController
+    const submit = vi
+      .fn<(input: ComposerSubmission) => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error('Response lost'))
+      .mockResolvedValue({ submissionId: 2 })
+    await registry.setLoaders({
+      '/extensions/retry/web.tsx': async () => ({
+        default: {
+          composer: ({ core }: { core: ReactNode }) =>
+            h(ComposerAttachmentAdapter, { submit, children: core }),
+          slots: {
+            'composer.attachments': () => {
+              controller = useComposerAttachments()
+              return null
+            },
+          },
+        },
+      }),
+    })
+    effects.push(store.watchConversation(id))
+    await tick()
+    const snapshot = view(id, 'conversation', true)
+    source(id).send('view', {
+      ...snapshot,
+      docs: {
+        ...snapshot.docs,
+        'pi.inbox': { items: merged ? [{ id: id * 100, mode: 'steer', content: 'prior' }] : [] },
+      },
+    })
+    const render = () => renderToStaticMarkup(scoped(id, h(Conversation)))
+    render()
+    controller!.setAttachments(() => [{ id: 'file', name: 'notes.txt', size: 12, status: 'ready' }])
+    harness.change!({ target: { value: 'new' } })
+    render()
+    harness.submit!()
+    await tick()
+    expect(render()).toContain('Response lost')
+    const attempt = submit.mock.calls[0][0]
+    expect(attempt.text).toBe(merged ? 'prior\nnew' : 'new')
+    const canceled = harness.fetch.mock.calls.length
+    // The SSE inbox can arrive even when the accepted action response was lost.
+    source(id).send('view', {
+      ...snapshot,
+      docs: {
+        ...snapshot.docs,
+        'pi.inbox': { items: [{ id: id * 100 + 1, mode: 'steer', content: attempt.text }] },
+      },
+    })
+    render()
+    harness.submit!()
+    await tick()
+    expect(submit.mock.calls[1][0]).toEqual(attempt)
+    expect(harness.fetch.mock.calls).toHaveLength(canceled)
+    render()
+    expect(controller!.attachments).toEqual([])
+  },
+)
+
+it('lets a recalled six-image draft remove images down to the four-image admission limit', async () => {
+  let controller: ComposerAttachmentController
+  const submit = vi
+    .fn<(input: ComposerSubmission) => Promise<unknown>>()
+    .mockResolvedValue({ submissionId: 1 })
+  await registry.setLoaders({
+    '/extensions/recovery/web.tsx': async () => ({
+      default: {
+        composer: ({ core }: { core: ReactNode }) =>
+          h(ComposerAttachmentAdapter, { submit, children: core }),
+        slots: {
+          'composer.attachments': () => {
+            controller = useComposerAttachments()
+            return null
+          },
+        },
+      },
+    }),
+  })
+  effects.push(store.watchConversation(47))
+  await tick()
+  const snapshot = view(47, 'conversation', true)
+  source(47).send('view', {
+    ...snapshot,
+    docs: {
+      ...snapshot.docs,
+      'pi.inbox': {
+        items: [1, 2].map((id) => ({
+          id,
+          mode: 'followUp',
+          content: [
+            { type: 'text', text: `follow ${id}` },
+            ...Array.from({ length: 3 }, () => ({
+              type: 'image',
+              mimeType: 'image/png',
+              data: 'eA==',
+            })),
+          ],
+        })),
+      },
+    },
+  })
+  const render = () => renderToStaticMarkup(scoped(47, h(Conversation)))
+  render()
+  harness.keyDown!({
+    key: 'ArrowUp',
+    nativeEvent: {},
+    currentTarget: { value: '', selectionStart: 0 },
+    preventDefault() {},
+  })
+  await tick()
+  render()
+  expect(controller!.images).toHaveLength(6)
+  harness.submit!()
+  await tick()
+  expect(submit).not.toHaveBeenCalled()
+  expect(() => controller!.setImages((images) => images.slice(1))).not.toThrow()
+  render()
+  expect(controller!.images).toHaveLength(5)
+  controller!.setImages((images) => images.slice(1))
+  render()
+  expect(controller!.images).toHaveLength(4)
+  expect(() =>
+    controller!.setImages((images) => [...images, { mimeType: 'image/png', data: 'eA==' }]),
+  ).toThrow('Attach up to 4 images and files per message.')
+  harness.submit!()
+  await tick()
+  expect(submit).toHaveBeenCalledOnce()
 })
 
 function Action() {
