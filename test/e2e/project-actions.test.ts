@@ -168,6 +168,8 @@ it('loads external project facets over user and built-in names, actions and tran
     server: { tools: [] },
   })
   expect(record().server?.error).toBeUndefined()
+  // Load before creating the facet so its appearance proves discovery reloaded, not an initial scan.
+  await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
   const added = join(projectRoot, '.ultimate/extensions/added')
   await mkdir(added, { recursive: true })
   await writeFile(join(added, 'web.tsx'), 'export default {}')
