@@ -436,6 +436,16 @@ export function createLander(
       next: (task, runtime, context) =>
         runtime.commit(async (tx) => {
           const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+          const pending = Object.entries(index.pendingReports).find(
+            ([, report]) => report.source === task.input.source,
+          )
+          if (pending) {
+            const [id, { conversationId, text, outcome }] = pending
+            return {
+              status: 'running',
+              checkpoint: { phase: 'report', id, conversationId, text, outcome },
+            }
+          }
           const entry = index.queue.find((item) => item.source === task.input.source)
           if (!entry) {
             delete index.landers[task.input.source]
@@ -487,7 +497,7 @@ export function createLander(
                 ms: Math.round(ran.ms),
               })
           }, context)
-        /** Record the outcome, log it and report it to the submitter, in one commit. */
+        /** Record the outcome, log, event and pending coordinator report in one commit. */
         const finish = (text: string, outcome: LanderOutcome) =>
           runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
@@ -505,6 +515,13 @@ export function createLander(
               conversationId: entry.conversationId,
               ...(entry.subject ? { subject: entry.subject } : {}),
             }
+            const report = {
+              source: entry.source,
+              conversationId: entry.conversationId,
+              outcome: draft.results[id],
+              text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
+            }
+            draft.pendingReports[id] = report
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
             if (outcome.outcome === 'landed') {
@@ -539,9 +556,9 @@ export function createLander(
               checkpoint: {
                 phase: 'report',
                 id,
-                conversationId: entry.conversationId,
-                outcome: draft.results[id],
-                text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
+                conversationId: report.conversationId,
+                outcome: report.outcome,
+                text: report.text,
               },
             }
           }, context)
@@ -1076,11 +1093,11 @@ export function createLander(
       },
       report: async (task, runtime, context) => {
         const { id, conversationId, text } = task.state.checkpoint
-        let { outcome } = task.state.checkpoint
+        const index = await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+        let outcome = index?.pendingReports[id]?.outcome ?? task.state.checkpoint.outcome
         let deployText = ''
         if (outcome?.outcome === 'landed') {
-          const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-          const result = index?.results[id]
+          const result = index?.pendingReports[id]?.outcome ?? index?.results[id] ?? outcome
           const saved = result?.steps.find(
             (row) => row.step.startsWith('deploy → ') || row.step.startsWith('deploy warning: '),
           )
@@ -1134,7 +1151,8 @@ export function createLander(
                 }
               }
               await runtime.commit(async (tx) => {
-                const current = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).results[id]
+                const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+                const current = draft.pendingReports[id]?.outcome ?? draft.results[id] ?? outcome!
                 await log(
                   tx,
                   runtime.conversationId,
@@ -1143,17 +1161,19 @@ export function createLander(
                     step: deployText,
                   },
                 )
+                if (draft.results[id]) draft.results[id].steps = current.steps
                 return { status: 'running', checkpoint: task.state.checkpoint }
               }, context)
             }
           }
         }
-        if (deployText)
-          outcome = (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))
-            ?.results[id]
-        await (
-          await runtime.conversation(conversationId as ConversationId, context)
-        )?.submit(
+        if (deployText) {
+          const current = await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+          outcome = current?.pendingReports[id]?.outcome ?? current?.results[id] ?? outcome
+        }
+        const conversation = await runtime.conversation(conversationId as ConversationId, context)
+        if (!conversation) throw new Error(`Submitting conversation #${conversationId} is missing`)
+        await conversation.submit(
           {
             type: 'input',
             content: [text, deployText].filter(Boolean).join('\n'),
@@ -1165,7 +1185,10 @@ export function createLander(
           },
           context,
         )
-        await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'next' } }), context)
+        await runtime.commit(async (tx) => {
+          delete (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).pendingReports[id]
+          return { status: 'running', checkpoint: { phase: 'next' } }
+        }, context)
       },
     },
     abort: (task, runtime, context) =>

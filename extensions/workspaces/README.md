@@ -118,7 +118,10 @@ with `sha`, `commits`, `paths`, `flaky`, `pushed`, or `failed` with `reason` and
 committed with the task state change or doc update it describes; a check result is logged right after the check
 runs, so a crash before its memo logs the rerun too. The same commits record each step as `{ step, at, check? }` in
 the queue entry's `steps`; when the submission ends, its steps, outcome, tip and target move into the root document's
-`results` (the latest 50).
+`results` (the latest 50). That same commit saves the coordinator input's source, conversation, text and full outcome
+in `pendingReports`, keyed by submission id and kept independently of that capped history. A report is removed only
+after the coordinator's input admission succeeds; `lander:<submission>` deduplicates admission if the task stops
+before clearing it. A missing coordinator faults the report rather than silently discarding it.
 
 The submitter follows the lander in its own transcript, from that document. The `workspace submit` card shows
 `submit · <tip> → <target>` and a status chip (`queued #2`, the current step with a spinner, `Landed <sha> · pushed`,
@@ -219,9 +222,12 @@ reload of this extension changed the Workspaces document, loses its memos but no
 the entry next skips merging and checks, pushes exactly `landed.sha` when the target still contains it, and reports
 the original landing. "Nothing new to land" means the tip was already in the target before this submission.
 
-The extension restarts a lander for every source whose queue holds submissions while its task is missing or ended:
-when the harness opens, on each reload of the extension, and at once when a task of the previous code faults. A fault
-of the current code's own task waits for the next submit or open, so a deterministic fault does not loop.
+The extension restarts a lander for every source with queued submissions or pending reports while its task is missing
+or ended: when the harness opens, on each reload of the extension, and at once when a task of the previous code
+faults. Pending reports run before that source's queue, without repeating Git, checks, push or the outcome event.
+Their full outcome also keeps deploy steps, mirrored into retained results when present, so replacement tasks keep
+both the saved step and the `lander-deploy:<submission>` admission receipt. A fault of the current code's own task
+waits for the next submit or open, so a deterministic fault does not loop.
 
 Top-level mains use `workspace status`, `workspace submit` and `workspace land` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core changes to the running clone.

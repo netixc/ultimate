@@ -1020,6 +1020,111 @@ it.concurrent('emits one landed event and notes the root once, across a replayed
   expect(await f.host.eventLog.recent({ events: [SubmissionLanded] })).toHaveLength(1)
 })
 
+it.concurrent('recovers coordinator admission after finish faults in the report phase', async () => {
+  const f = await lander({})
+  const checked = join(f.directory, 'checks')
+  const updates = join(f.directory, 'git-updates')
+  const settings = { lander: { checks: [`echo checked >> '${checked}'`] } }
+  f.host.projectSettings = async () => settings
+  await writeFile(
+    join(f.projectRoot, '.git/hooks/reference-transaction'),
+    `#!/bin/sh\ncat >/dev/null\n[ "$1" != committed ] || echo update >> '${updates}'\n`,
+    { mode: 0o755 },
+  )
+  const task = createLander(f.host, Workspaces, (_source, operation) => operation())
+  const report = task.definition.phases.report
+  let injected = false
+  f.prepared.registry.install(
+    defineExtension({
+      ...workspaceExtension(f.host),
+      tasks: [
+        ...(workspaceExtension(f.host).tasks ?? []).filter(
+          (item) => item.definition.name !== task.definition.name,
+        ),
+        {
+          definition: {
+            ...task.definition,
+            phases: {
+              ...task.definition.phases,
+              report: async (...args: Parameters<typeof report>) => {
+                // Finish has really moved Git, removed the queue entry and emitted its outcome. Only now fault.
+                if (!injected) {
+                  injected = true
+                  f.host.projectSettings = async () => ({ lander: { checks: 'malformed' } })
+                }
+                await report(...args)
+              },
+            },
+          },
+        },
+      ],
+    }),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const sha = await commit((await f.service.get(id, context))!.path, 'landed.txt')
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  const index = async () =>
+    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  const first = Object.values((await index()).landers)[0] as TaskId
+  await until(async () => {
+    const record = await f.opened.harness.commit((tx) => tx.task(first), context)
+    return record?.state.status === 'terminal'
+  })
+  const faulted = await f.opened.harness.commit((tx) => tx.task(first), context)
+  expect(faulted!.state).toMatchObject({
+    status: 'terminal',
+    outcome: { status: 'faulted', error: { message: expect.stringContaining('lander.checks') } },
+  })
+  const finished = await index()
+  expect(finished.queue).toEqual([])
+  expect(finished.results[submission]).toMatchObject({
+    outcome: 'landed',
+    sha,
+    paths: ['landed.txt'],
+  })
+  const events = await f.host.eventLog.recent({ events: [SubmissionLanded, CheckRan] })
+  expect(await f.host.eventLog.recent({ events: [SubmissionLanded] })).toMatchObject([
+    { data: { submission, conversationId: id, sha, paths: ['landed.txt'] } },
+  ])
+  expect(events).toHaveLength(2)
+  const log = (await landerLog(f)).log
+  expect(log.filter((line) => line.outcome)).toEqual([
+    expect.objectContaining({ submission, outcome: 'landed', sha }),
+  ])
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const reports = async () =>
+    (await conversation.context(context)).entries.filter(
+      (entry) => entry.kind === 'workspaces.lander-report',
+    )
+  expect(await reports()).toHaveLength(0)
+  const before = await readFile(updates, 'utf8')
+  expect(await readFile(checked, 'utf8')).toBe('checked\n')
+  f.host.projectSettings = async () => settings
+  await f.reopen()
+  const resumed = Object.values((await index()).landers)[0] as TaskId | undefined
+  if (resumed !== undefined)
+    await until(
+      async () =>
+        (await f.opened.harness.commit((tx) => tx.task(resumed), context))?.state.status ===
+        'terminal',
+    )
+  const coordinator = (await f.opened.harness.conversation(id, context))!
+  await coordinator.waitForIdle(context)
+  const delivered = (await coordinator.context(context)).entries.filter(
+    (entry) => entry.kind === 'workspaces.lander-report',
+  )
+  expect(delivered).toHaveLength(1)
+  expect(JSON.stringify(delivered[0].model)).toContain(`landed as ${sha.slice(0, 7)}`)
+  expect((await index()).pendingReports).toEqual({})
+  expect((await index()).results[submission]).toEqual(finished.results[submission])
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(sha)
+  expect(await readFile(checked, 'utf8')).toBe('checked\n')
+  expect(await readFile(updates, 'utf8')).toBe(before)
+  expect((await landerLog(f)).log).toEqual(log)
+  expect(await f.host.eventLog.recent({ events: [SubmissionLanded, CheckRan] })).toEqual(events)
+})
+
 it.concurrent('delivers a persisted version-one report without outcome as plain input once', async () => {
   const f = await lander({})
   const id = await f.create()

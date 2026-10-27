@@ -7,6 +7,7 @@ export type WorkspaceConversation = ConversationSummary & { workspace?: Workspac
 const none: WorkspaceIndex = {
   items: {},
   queue: [],
+  pendingReports: {},
   landers: {},
   landerConversations: {},
   results: {},
