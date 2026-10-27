@@ -36,7 +36,7 @@ const READY = {
   handoff: 'Open: the preview round.',
 }
 
-async function fixture() {
+async function fixture(destination = 'fresh-roots') {
   const home = await temp('ultimate-dream-asleep-')
   const harness = await Harness.open(
     new MemoryStorage(),
@@ -95,7 +95,7 @@ async function fixture() {
     invoke,
     restart: vi.fn<ExtensionHost['restart']>(async () => {
       expect(await readJson(join(home, 'pending-chapter.json'), null)).toEqual({
-        to: 'fresh-roots',
+        to: destination,
         by: process.pid,
       })
       return 'Restart refused'
@@ -184,7 +184,7 @@ it('commits each sleep phase, carries the handover, backs up before journaling, 
 it.each([undefined, 'off', 'local'] as const)(
   'skips cloud with a recorded reason for %s',
   async (status) => {
-    const f = await fixture()
+    const f = await fixture('other-name')
     await f.prepare()
     if (status === undefined) f.services.delete(CloudApi)
     else f.cloud.status.mockResolvedValue(status)
@@ -196,6 +196,8 @@ it.each([undefined, 'off', 'local'] as const)(
     expect(result).toMatchObject({
       sleep: {
         chapter: 'other-name',
+        phase: 'failed',
+        error: 'Error: Restart refused',
         backup: {
           skipped: status === undefined ? 'Cloud extension is not enabled' : reasons[status],
         },
