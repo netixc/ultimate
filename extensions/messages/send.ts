@@ -129,7 +129,7 @@ export async function send(
       // Still queued, it is unread: answering it would answer what the agent has not seen.
       if (pending?.state === 'sent')
         throw new Error(
-          `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
+          `Cannot answer ${toLabel}'s message ${pending.id} while it is queued and unread. Let it arrive, then answer here; your answer is sent back automatically. For a one-way update, use reply: false.`,
         )
       // A message to the user who is owed an answer is that answer, with its questions and images.
       if (pending && to === 'user') {

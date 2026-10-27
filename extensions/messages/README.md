@@ -24,13 +24,17 @@ An idle recipient wakes. A busy one receives a follow-up after its current run, 
 `steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including `@lander` and other
 standing agents, and to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
 field records `steer` or `followUp`.
-The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
-Answer directly rather than messaging the sender. A reply-enabled agent message back to a sender whose
+The answer returns as `board.reply`, steering the sender. Its model text explains that the next final answer
+stays local; use `message` if the replying agent needs a decision or follow-up. An unanswered input produces a
+failure reply instead.
+Answer a `board.message` directly rather than messaging the sender. A reply-enabled agent message back to a sender whose
 reply-enabled message the agent has received and not answered becomes that answer: in one commit `send()` marks the
 original `answered`, appends the reply (`re`, `reply: false`, its `images`, its `call`) and starts the delivery task
 in its reply phase; its `steer` and `reply` flags are ignored. The original's delivery then sees it answered and keeps
-the final answer local, and the tool returns `Sent as your answer to message N.` with `terminate`, so the run ends
-without restating it. A replayed call finds the reply through the `board.sent` receipt and memo, so it is sent once.
+the final answer local, and the tool returns `Sent to <recipient> as your answer to message N.` with `terminate`,
+so the run ends without restating it. A replayed call finds the reply through the `board.sent` receipt and memo,
+so it is sent once. While the agent's incoming request is still queued and unread, the call is refused: let that
+request arrive, then answer it, or use `reply: false` for a one-way update.
 `reply: false` updates and other recipients are unaffected. @ultimate's message to `user` is never refused for an
 owed answer: while a user's message it has read is open, the message answers it (marked `answered`, the new one
 names it in `re`, its delivery keeps the final answer local) and, with `questions`, stays open itself, so a

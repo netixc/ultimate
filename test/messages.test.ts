@@ -33,6 +33,7 @@ import pauseExtension, {
 } from '../extensions/pause/server.ts'
 import { Messages, MessageSent } from '../extensions/messages/api.ts'
 import { append } from '../extensions/messages/log.ts'
+import { send as sendMessage } from '../extensions/messages/send.ts'
 import { UserInputEvent } from '../shared/events.ts'
 import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
@@ -327,6 +328,16 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
   const f = await fixture()
   await f.send(`#${f.recipient.id}`)
   await until(async () => (await replies(f)).length === 1)
+  await f.opened.root.waitForIdle(context)
+  const [request, reply] = (await f.log())!.messages
+  expect(f.observed).toContain(
+    `Message from #1 (@ultimate):\nHello\nAnswer here; your answer is sent to #1 (@ultimate) automatically. Do not use message to reply.`,
+  )
+  expect(f.observed).toContain(
+    `Reply from #${f.recipient.id} to your message ${request.id}:\n${reply.text}\nYour next final answer stays here; it is not sent back automatically. Use message to #${f.recipient.id} if it needs a decision or follow-up.`,
+  )
+  // Answering the reply stays local: it creates no further message or callback.
+  expect((await f.log())!.messages).toHaveLength(2)
   expect((await f.log())!.messages.map((m) => [m.from, m.to, m.state])).toEqual([
     [1, f.recipient.id, 'answered'],
     [f.recipient.id, 1, 'delivered'],
@@ -508,11 +519,42 @@ it('turns a message to a sender it owes an answer into that answer, once, with i
   expect(reply.data).toMatchObject({ id: answer.id, re: asked.id, text: 'Ready', images: 2 })
   expect(imagesIn(reply)).toEqual([png(0), png(1)])
   // The tool result ends the run: no final answer restates it, and delivery sends nothing more.
-  expect((await toolResults(f)).at(-1)).toContain(`Sent as your answer to message ${asked.id}.`)
+  expect((await toolResults(f)).at(-1)).toContain(
+    `Sent to #1 as your answer to message ${asked.id}.`,
+  )
   const view = await f.recipient.viewState(context)
   expect(view.value.entries.at(-1)?.kind).toBe('pi.tool-result')
   view.dispose()
   expect(f.observed.filter((t) => t.startsWith('Reply from'))).toHaveLength(1)
+})
+it('explains that an incoming request is queued and unread, then answers it once delivered', async () => {
+  const f = await fixture()
+  await f.recipient.submit({ type: 'input', content: 'HOLD' }, context)
+  await until(f.holding)
+  await f.send('@scout', 'SEND {"to":"#1","text":"Ready"}', { steer: false })
+  const page = await f.host.scanSubmissions(
+    { conversationId: f.recipient.id },
+    100,
+    undefined,
+    context,
+  )
+  expect(page.items.find((s) => s.requestId === 'board:1')).toMatchObject({ status: 'queued' })
+  await expect(
+    sendMessage(f.host, f.recipient.id, { to: '#1', text: 'Too early' }, context),
+  ).rejects.toThrow(
+    "Cannot answer #1 (@ultimate)'s message 1 while it is queued and unread. Let it arrive, then answer here; your answer is sent back automatically. For a one-way update, use reply: false.",
+  )
+  expect((await f.log())!.messages).toMatchObject([{ id: 1, state: 'sent' }])
+  expect((await f.log())!.messages).toHaveLength(1)
+  f.hold.release()
+  await until(async () => (await replies(f)).length === 1)
+  await f.recipient.waitForIdle(context)
+  expect((await f.log())!.messages).toMatchObject([
+    { id: 1, state: 'answered' },
+    { id: 2, re: 1, text: 'Ready', state: 'delivered' },
+  ])
+  expect((await f.log())!.messages).toHaveLength(2)
+  expect((await toolResults(f)).at(-1)).toContain('Sent to #1 as your answer to message 1.')
 })
 it("turns @ultimate's message to the user it owes an answer into that answer and ends the run", async () => {
   const f = await fixture()

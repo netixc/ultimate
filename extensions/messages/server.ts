@@ -233,7 +233,7 @@ export default function messages(host: ExtensionHost) {
               output: [
                 {
                   type: 'text',
-                  text: `Sent as your answer to message ${sent.re}.`,
+                  text: `Sent to ${input.to} as your answer to message ${sent.re}.`,
                 },
               ],
               control: { terminate: true as const },

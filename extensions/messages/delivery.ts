@@ -404,7 +404,7 @@ export function delivery(host: ExtensionHost) {
               ...(m.remote ? { remote: m.remote } : {}),
             },
           }
-          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}`
+          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}\nYour next final answer stays here; it is not sent back automatically. Use message to ${task.input.toLabel} if it needs a decision or follow-up.`
           const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
           const requestId = `board-reply:${m.id}`
           if (sender && triager) {
