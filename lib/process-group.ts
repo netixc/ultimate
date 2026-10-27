@@ -46,7 +46,7 @@ function identify(pid: number): string | undefined {
   return `${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`
 }
 
-/** Whether any process of group `pid` still exists. */
+/** Whether any process of group `pid` still exists, including one we may not signal. */
 export function groupAlive(pid?: number) {
   if (!pid) return false
   try {
@@ -54,16 +54,8 @@ export function groupAlive(pid?: number) {
     return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
-    throw error
-  }
-}
-
-/** Like `groupAlive`, but a member this process may not probe (EPERM) counts as alive. */
-function probe(pid: number) {
-  try {
-    return groupAlive(pid)
-  } catch (error) {
-    // A member of another user survived, so the group is still there.
+    // An inaccessible member is still alive. Darwin also reports EPERM briefly while the last member is reaped;
+    // keep polling until ESRCH, never treat a permission failure as proof that the group is gone.
     if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
     throw error
   }
@@ -73,8 +65,9 @@ function send(pid: number, name: NodeJS.Signals) {
   try {
     process.kill(-pid, name)
   } catch (error) {
-    // The group may empty between the check and the signal.
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    // The group may empty between the check and the signal. Darwin can deny a signal while its last member is
+    // reaped; a denied signal is not success: drain/stopGroup still require the group to exit and reject survivors.
+    if (!['ESRCH', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
   }
 }
 
@@ -200,7 +193,7 @@ export async function stopGroup(
     }
     // After a KILL the leader's exit drains the rest of the group, with its own grace. `ended` is settled once and
     // for all, so a group that reported a survivor is probed again: once empty, it exited after all.
-    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || probe(pid)))
+    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || groupAlive(pid)))
       throw new Error(`Process group ${pid} did not exit`)
   } else {
     const recorded = pidFile && (await readPidFile(pidFile)) === pid

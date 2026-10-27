@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -12,29 +12,46 @@ import {
 import { removeTemp, temp, until } from '../helpers.ts'
 
 /** Whether process `pid` still runs; a killed orphan may stay a zombie until init reaps it. */
-const running = async (pid: number) => {
-  const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '')
-  return stat !== '' && stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z'
+const running = (pid: number) => {
+  try {
+    return !execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .trim()
+      .startsWith('Z')
+  } catch (error) {
+    // ps exits 1 once the process is gone; other failures must fail the test.
+    if ((error as { status: number }).status === 1) return false
+    throw error
+  }
 }
-const startTicks = async (pid: number) =>
-  (await readFile(`/proc/${pid}/stat`, 'utf8')).split(') ')[1].split(' ')[19]
-const bootId = async () => (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
+const identity = async (pid: number) => {
+  if (process.platform === 'darwin')
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+  const stat = await readFile(`/proc/${pid}/stat`, 'utf8')
+  const boot = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
+  return `${boot}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`
+}
 
 it('records the pid and start time before the program runs, and the program keeps that pid', async () => {
   const directory = await temp('ultimate-process-group-')
   try {
     const pidFile = join(directory, 'run.pid')
     // The program reads its own pid file: it exists and names the program's pid before it runs.
-    const { child, closed } = spawnGroup('/bin/sh', ['-c', `cat '${pidFile}'; echo $$`], {
+    const group = spawnGroup('/bin/sh', ['-c', `cat '${pidFile}'; echo $$; exec sleep 60`], {
       pidFile,
     })
+    const { child } = group
     let output = ''
     child.stdout.setEncoding('utf8').on('data', (text: string) => (output += text))
-    await closed
-    expect(output).toBe(`${child.pid}\n${child.pid}\n`)
-    expect(await readFile(`${pidFile}.start`, 'utf8')).toMatch(
-      new RegExp(`^${await bootId()}:\\d+\n$`),
-    )
+    try {
+      await until(() => output === `${child.pid}\n${child.pid}\n`)
+      expect(await readFile(`${pidFile}.start`, 'utf8')).toBe(`${await identity(child.pid!)}\n`)
+    } finally {
+      await stopGroup(child.pid!, { pidFile, leader: group })
+      await group.closed
+    }
   } finally {
     await removeTemp(directory)
   }
@@ -64,7 +81,7 @@ it('stops what a leader left in its group when it exits', async () => {
     const childFile = join(directory, 'child')
     const group = spawnGroup('/bin/sh', ['-c', `sleep 60 & echo $! > '${childFile}'`], {})
     expect(await group.ended).toBe(true)
-    expect(await running(Number(await readFile(childFile, 'utf8')))).toBe(false)
+    expect(running(Number(await readFile(childFile, 'utf8')))).toBe(false)
     // Its leader is reaped, so stopping it again signals nothing and only confirms it is gone.
     await stopGroup(group.child.pid!, { leader: group })
   } finally {
@@ -116,7 +133,7 @@ it('stops a group that once reported a survivor once nothing of it is left', asy
     kill.mockRestore()
     const child = Number(await readFile(childFile, 'utf8').catch(() => '0'))
     // Usually killed by the test already.
-    if (child && (await running(child))) process.kill(child, 'SIGKILL')
+    if (child && running(child)) process.kill(child, 'SIGKILL')
     await removeTemp(directory)
   }
 })
@@ -136,7 +153,9 @@ it('never signals a pid file whose pid now names another process, or a group who
     await writeFile(pidFile, `${stranger.pid}\n`)
     await writeFile(
       `${pidFile}.start`,
-      `${await bootId()}:${Number(await startTicks(stranger.pid!)) - 1}\n`,
+      `${(await identity(stranger.pid!)).replace(/\d(?=\D*$)/, (digit) =>
+        digit === '9' ? '8' : '9',
+      )}\n`,
     )
     await stopGroup(stranger.pid!, { pidFile, grace: 100 })
     expect(groupAlive(stranger.pid)).toBe(true)
@@ -147,7 +166,7 @@ it('never signals a pid file whose pid now names another process, or a group who
   } finally {
     process.kill(-stranger.pid!, 'SIGKILL')
     process.kill(-orphaned.pid!, 'SIGKILL')
-    await until(async () => !(await running(Number(member))))
+    await until(() => !running(Number(member)))
     await removeTemp(directory)
   }
 })
@@ -158,10 +177,7 @@ it('sweeps the groups that pid files a crash left behind name, keeping the ones 
   const live = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
   try {
     await writeFile(join(directory, 'left.pid'), `${orphan.pid}\n`)
-    await writeFile(
-      join(directory, 'left.pid.start'),
-      `${await bootId()}:${await startTicks(orphan.pid!)}\n`,
-    )
+    await writeFile(join(directory, 'left.pid.start'), `${await identity(orphan.pid!)}\n`)
     await writeFile(join(directory, 'live.pid'), `${live.pid}\n`)
     await writeFile(join(directory, 'note.txt'), 'not a pid file')
     await sweepPidFiles(directory, (name) => name === 'live.pid')
@@ -219,7 +235,10 @@ it('returns when a process outside the group keeps its output open', async () =>
     const began = Date.now()
     const code = await runGroup(
       '/bin/sh',
-      ['-c', `setsid sleep 60 & echo $! > '${pidFile}'; sleep 0.3`],
+      [
+        '-c',
+        `"${process.execPath}" --input-type=module -e 'import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs"; const child = spawn("sleep", ["60"], { detached: true, stdio: ["ignore", 1, 2] }); writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); child.unref()'; sleep 0.3`,
+      ],
       {
         cwd: directory,
         pidFile: join(directory, 'pids', 'a.pid'),
@@ -227,6 +246,8 @@ it('returns when a process outside the group keeps its output open', async () =>
       },
     )
     expect(code).toBe(0)
+    const escaped = Number(await readFile(pidFile, 'utf8'))
+    expect(running(escaped)).toBe(true)
     expect(Date.now() - began).toBeLessThan(5000)
   } finally {
     const escaped = Number(await readFile(pidFile, 'utf8').catch(() => '0'))

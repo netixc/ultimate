@@ -14,6 +14,7 @@ export async function browserBinary() {
     process.env.ULTIMATE_CHROMIUM,
     '/usr/bin/chromium',
     '/usr/bin/google-chrome-stable',
+    chromium.executablePath(),
     ...(await readdir(cache).catch(() => []))
       .filter((name) => name.startsWith('chromium-'))
       .toSorted()
@@ -29,7 +30,7 @@ export async function browserBinary() {
     }
   }
   throw new Error(
-    'No Chromium found. Set ULTIMATE_CHROMIUM or install /usr/bin/chromium, /usr/bin/google-chrome-stable, or ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome.',
+    'No Chromium found. Set ULTIMATE_CHROMIUM, install Playwright Chromium, or install /usr/bin/chromium or /usr/bin/google-chrome-stable.',
   )
 }
 
