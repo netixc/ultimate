@@ -8,6 +8,7 @@ import {
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+import { InlineCodemodeSandbox, loadQuickJSWasm } from '@earendil-works/pi-codemode'
 import type { ConversationId, ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
@@ -165,6 +166,48 @@ it('keeps codemode guidance without repeating top-level tool schemas', async () 
   expect(tool.description).toContain('store(key,value)/load(key)')
   expect(tool.description).toContain('yielded wait discards them')
   expect(tool.description).toContain('declare const ultimate')
+})
+
+it('recovers from a missing tool using only discovery available in Ultimate', async () => {
+  const { server } = await fixture()
+  const missing = await run(server, 'await tools.screenshot({});')
+  expect(missing.data.isError).toBe(true)
+  expect(missing.data.details.calls).toEqual([])
+  expect(missing.data.details.error).toContain('tools.screenshot does not exist.')
+  expect(missing.data.details.error).not.toContain('searchTools')
+  expect(missing.data.details.error).toContain('ALL_TOOLS lists every tool.')
+  const recovered = await run(
+    server,
+    `const read = ALL_TOOLS.find(tool => tool.name === 'read');
+    return await tools[read.name]({ path: ${JSON.stringify(join(server.host.home, 'scratch.txt'))} });`,
+  )
+  expect(recovered.data.isError).not.toBe(true)
+  expect(recovered.data.details.value).toContain('before')
+})
+
+it('keeps the discovery hint usable when an integration exposes searchTools', async () => {
+  const sandbox = new InlineCodemodeSandbox({
+    wasm: loadQuickJSWasm(),
+    tools: [{ name: 'read', execute: () => 'read result' }],
+    globals: [
+      {
+        name: 'searchTools',
+        execute: (query) => (query === 'read' ? [{ name: 'read' }] : []),
+      },
+    ],
+  })
+  try {
+    const missing = await sandbox.execute('await tools.screenshot({});')
+    expect(missing.ok).toBe(false)
+    if (missing.ok) throw new Error('Expected a missing-tool error')
+    expect(missing.error.message).toContain('searchTools(query) finds tools by topic.')
+    const recovered = await sandbox.execute(
+      `const found = await searchTools('read'); return await tools[found[0].name]({});`,
+    )
+    expect(recovered).toMatchObject({ ok: true, value: 'read result' })
+  } finally {
+    await sandbox.close()
+  }
 })
 
 async function run(

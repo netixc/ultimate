@@ -1,0 +1,24 @@
+diff --git a/dist/runtime/prelude-source.js b/dist/runtime/prelude-source.js
+index c244f03d7bdb3eca7b985a886895543e150cc4e9..2668c8c7d2e341b99a56ea0c69f3b873020dc1dd 100644
+--- a/dist/runtime/prelude-source.js
++++ b/dist/runtime/prelude-source.js
+@@ -242,15 +242,17 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
+ 			},
+ 		});
+ 	}
++	const globals = parse(globalsJson);
+ 	const toolsProxy = guard(
+ 		tools,
+ 		"tools",
+ 		allTools.map((tool) => tool.name),
+-		"ALL_TOOLS lists every tool; searchTools(query) finds tools by topic.",
++		"ALL_TOOLS lists every tool." +
++			(globals.some(({ name }) => name === "searchTools") ? " searchTools(query) finds tools by topic." : ""),
+ 	);
+ 
+ 	const namespaces = new Map();
+-	for (const { name, spread } of parse(globalsJson)) {
++	for (const { name, spread } of globals) {
+ 		const fn = caller("global", name, spread);
+ 		const dot = name.indexOf(".");
+ 		if (dot === -1) {
