@@ -10,7 +10,7 @@ import type { InstanceService } from '../instance/api.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
 import { StandingDoc } from '../subagents/api.ts'
 import type { GateResult } from './refs.ts'
-import { writeSeed } from './seed.ts'
+import { recreationReason, writeSeed } from './seed.ts'
 import type { Seed } from './types.ts'
 
 /** Memory briefs have no lineage cap. Use 6k tokens, the same envelope as lineage's tally catch-up budget. */
@@ -70,13 +70,12 @@ export async function gate(
       seed.counts.todos +
         seed.counts.questions +
         seed.scripts.filter((item) => item.scope !== 'project').length +
-        seed.automations.filter((item) => !item.prompt || item.condition?.of.startsWith('#'))
-          .length,
+        seed.automations.filter((item) => recreationReason(item)).length,
     )
     count(
       'automations',
       automations.length,
-      seed.automations.filter((item) => item.prompt && !item.condition?.of.startsWith('#')).length,
+      seed.automations.filter((item) => !recreationReason(item)).length,
     )
     // Passive entry delivery runs after the seed commit. Wait only for that local effect, not a model.
     const deadline = Date.now() + 10_000

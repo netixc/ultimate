@@ -204,6 +204,25 @@ function chapterText(host: ExtensionHost, seed: Seed) {
   ].join('\n')
 }
 
+/** Why a carried trigger needs recreating instead of reusing a previous chapter's conversation ids. */
+export function recreationReason(automation: Seed['automations'][number]) {
+  const { event, condition, prompt } = automation
+  const field =
+    event?.name === 'conversations.compacted'
+      ? 'conversation'
+      : event?.name === 'workspaces.landed'
+        ? 'conversationId'
+        : undefined
+  const target = field && event?.where?.[field]
+  if (
+    condition?.of.startsWith('#') ||
+    (typeof target === 'number' && target !== ROOT_CONVERSATION_ID)
+  )
+    return 'conversation target'
+  if (!prompt) return 'subscribers'
+  return undefined
+}
+
 /**
  * Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. Returns the
  * chapter's seed, if it has one.
@@ -239,10 +258,10 @@ export async function applySeed(host: ExtensionHost) {
             text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
           })),
         ...seed.automations
-          .filter((item) => !item.prompt || item.condition?.of.startsWith('#'))
-          .map(({ name, schedule, event, condition }) => ({
+          .filter((item) => recreationReason(item))
+          .map((item) => ({
             owner: 'ultimate' as const,
-            text: `Recreate ${schedule ? 'schedule' : event ? 'event' : 'context'} automation (${name}) with new ${condition?.of.startsWith('#') ? 'conversation target' : 'subscribers'}: ${JSON.stringify(schedule ?? event ?? condition)}`,
+            text: `Recreate ${item.schedule ? 'schedule' : item.event ? 'event' : 'context'} automation (${item.name}) with new ${recreationReason(item)}: ${JSON.stringify(item.schedule ?? item.event ?? item.condition)}`,
           })),
       ]
       for (const item of carried) todos.items.push({ ...item, id: todos.next++, at: Date.now() })
@@ -268,7 +287,7 @@ export async function applySeed(host: ExtensionHost) {
   }
   const signal = new AbortController().signal
   for (const automation of seed.automations) {
-    if (!automation.prompt || automation.condition?.of.startsWith('#')) continue
+    if (recreationReason(automation)) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     if (seed.gate) {

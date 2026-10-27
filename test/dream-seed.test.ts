@@ -456,6 +456,57 @@ it('carries event and standing context triggers, but leaves numeric context targ
   )
 })
 
+it.each([false, true])(
+  'recreates chapter-bound event targets but carries fixed root filters: gate = %s',
+  async (gate) => {
+    const f = await fixture()
+    await f.source()
+    for (const [name, field] of [
+      ['conversations.compacted', 'conversation'],
+      ['workspaces.landed', 'conversationId'],
+    ] as const) {
+      for (const target of [ROOT_CONVERSATION_ID, 42])
+        await f.host.invoke(
+          'automations',
+          'create',
+          {
+            name: `${name} ${target}`,
+            prompt: 'Review',
+            event: { name, where: { [field]: target } },
+          },
+          new AbortController().signal,
+        )
+    }
+    const seed = await buildSeed(f.host, 1)
+    if (gate) seed.gate = true
+    expect(seed.counts.automations).toBe(4)
+    await writeSeed(join(f.home, 'chapters', 'event-targets'), seed)
+    await f.close()
+    await requestChapter(f.home, 'event-targets')
+    await f.open()
+    await applySeed(f.host)
+    const todos = (await f.harness.snapshot(Todos, ROOT_CONVERSATION_ID, context))!.items
+    expect(
+      todos.filter(({ text }) => text.startsWith('Recreate event')).map(({ text }) => text),
+    ).toEqual([
+      'Recreate event automation (conversations.compacted 42) with new conversation target: {"name":"conversations.compacted","where":{"conversation":42}}',
+      'Recreate event automation (workspaces.landed 42) with new conversation target: {"name":"workspaces.landed","where":{"conversationId":42}}',
+    ])
+    expect(
+      (await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations,
+    ).toEqual(['conversations.compacted 1', 'workspaces.landed 1'])
+    const carried = await automationActions.list(null, { host: f.host } as ActionContext)
+    expect(carried.map(({ event }) => event && { name: event.name, where: event.where })).toEqual(
+      gate
+        ? []
+        : [
+            { name: 'conversations.compacted', where: { conversation: 1 } },
+            { name: 'workspaces.landed', where: { conversationId: 1 } },
+          ],
+    )
+  },
+)
+
 it('checks gate automation schedules without creating any and records receipts exactly once', async () => {
   const f = await fixture()
   await f.source()
