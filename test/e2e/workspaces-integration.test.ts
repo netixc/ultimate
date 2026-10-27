@@ -1636,9 +1636,14 @@ it.concurrent('runs a check group concurrently and records each summary', async 
   )
   expect(checks).toHaveLength(3)
 })
-it.concurrent('reruns only the failing command of a group, reports its output twice failed, and lands a flaky one', async () => {
-  const f = await lander({
-    checks: [['echo PASSING_SUMMARY', 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt']],
+it.concurrent('logs both runs of each twice-failing group member, reruns only failures, and lands a flaky one', async () => {
+  const f = await lander({})
+  const failing = ['ONE', 'TWO'].map((name) => {
+    const marker = join(f.directory, name)
+    return `if [ -f '${marker}' ]; then echo ${name}_RERUN; else touch '${marker}'; echo ${name}_FIRST; fi; test ! -f fail.txt`
+  })
+  f.host.projectSettings = async () => ({
+    lander: { checks: [['echo PASSING_SUMMARY', ...failing]] },
   })
   const id = await f.create()
   await f.service.ready(id, context)
@@ -1648,36 +1653,42 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
   await f.service.submit(id, 'None', context)
   const [report] = await submitted(f, id)
   expect(report).toContain('check failed twice')
-  expect(report).toContain('CHECK_OUTPUT_TAIL')
+  expect(report).toContain('ONE_RERUN')
+  expect(report).not.toContain('TWO_RERUN')
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   const failed = (await landerLog(f)).log
   expect(
     failed.filter((line) => line.step?.startsWith('rerunning:')).map((line) => line.step),
-  ).toEqual(['rerunning: echo CHECK_OUTPUT_TAIL; test ! -f fail.txt'])
+  ).toEqual(expect.arrayContaining(failing.map((command) => `rerunning: ${command}`)))
+  expect(failed.filter((line) => line.step?.startsWith('rerunning:'))).toHaveLength(2)
+  for (const [member, command] of failing.entries()) {
+    const runs = failed.filter((line) => line.check?.command === command)
+    expect(runs).toHaveLength(2)
+    for (const [run, marker] of ['FIRST', 'RERUN'].entries())
+      expect(runs[run]).toMatchObject({
+        step: `checked: ${command}`,
+        check: { command, result: 'failed' },
+        output: expect.stringContaining(`${['ONE', 'TWO'][member]}_${marker}`),
+      })
+  }
   expect(failed.filter((line) => line.check).map((line) => line.check)).toEqual(
     expect.arrayContaining([
       { command: 'echo PASSING_SUMMARY', result: 'passed', summary: 'PASSING_SUMMARY' },
-      { command: 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt', result: 'failed' },
+      ...failing.map((command) => ({ command, result: 'failed' })),
     ]),
   )
   expect(failed.at(-1)).toMatchObject({
     outcome: 'failed',
-    reason: 'check failed twice: echo CHECK_OUTPUT_TAIL; test ! -f fail.txt',
-    output: expect.stringContaining('CHECK_OUTPUT_TAIL'),
+    reason: `check failed twice: ${failing[0]}`,
+    output: expect.stringContaining('ONE_RERUN'),
   })
   expect(failed.at(-1)!.sha).toBeUndefined()
   // A failed landing leaves no note in the root.
   expect(await rootNotes(f)).toHaveLength(0)
   const marker = join(f.directory, 'flaky')
+  const flakyCommand = `if [ -f '${marker}' ]; then echo ok; exit 0; fi; touch '${marker}'; echo FIRST_RUN_FAILED; exit 1`
   f.host.projectSettings = async () => ({
-    lander: {
-      checks: [
-        [
-          'true',
-          `if [ -f '${marker}' ]; then echo ok; exit 0; fi; touch '${marker}'; echo FIRST_RUN_FAILED; exit 1`,
-        ],
-      ],
-    },
+    lander: { checks: [['true', flakyCommand]] },
   })
   await git(workspace.path, 'rm', '-q', 'fail.txt')
   await git(workspace.path, 'commit', '-qm', 'fix')
@@ -1703,17 +1714,30 @@ it.concurrent('reruns only the failing command of a group, reports its output tw
   const runs = (submission: string) =>
     checks
       .filter((event) => event.data.submission === submission)
-      .map((event) => `${event.data.command.split(' ', 2).join(' ')} ${event.data.result}`)
+      .map((event) => `${event.data.command} ${event.data.result}`)
       .toSorted()
   const submissions = [...new Set(checks.map((event) => event.data.submission))]
   expect(submissions).toHaveLength(2)
-  expect(runs(submissions[1])).toEqual([
-    'echo CHECK_OUTPUT_TAIL; failed',
-    'echo CHECK_OUTPUT_TAIL; failed',
-    'echo PASSING_SUMMARY passed',
-  ])
-  expect(runs(submissions[0])).toEqual(['if [ failed', 'if [ flaky', 'true passed'])
-  for (const event of checks) expect(event.data.ms).toEqual(expect.any(Number))
+  expect(runs(submissions[1])).toEqual(
+    [
+      'echo PASSING_SUMMARY passed',
+      ...failing.flatMap((command) => [`${command} failed`, `${command} failed`]),
+    ].toSorted(),
+  )
+  expect(runs(submissions[0])).toEqual(
+    [`${flakyCommand} failed`, `${flakyCommand} flaky`, 'true passed'].toSorted(),
+  )
+  const logged = (await landerLog(f)).log.filter((line) => line.check)
+  expect(logged).toHaveLength(checks.length)
+  for (const event of checks) {
+    expect(event.data.ms).toEqual(expect.any(Number))
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        submission: event.data.submission,
+        check: expect.objectContaining({ command: event.data.command, result: event.data.result }),
+      }),
+    )
+  }
 })
 it.concurrent('fast-forwards the worktree that has the target checked out, past unrelated dirty files but not over overlapping ones', async () => {
   const f = await lander({})
