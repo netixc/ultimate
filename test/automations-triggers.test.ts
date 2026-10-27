@@ -334,6 +334,24 @@ it('uses context hysteresis and cooldown and catches a missed crossing on open o
   expect((await f.record(a.id)).fires).toBe(3)
 })
 
+it('re-arms a low context threshold after a drop and fires on the next crossing', async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Low context',
+    condition: { metric: 'context', of: '@ultimate', above: 1, cooldownMs: 0 },
+  })) as Automation
+  for (const [percent, fires, armed] of [
+    [1, 1, false],
+    [0, 1, true],
+    [1, 2, false],
+  ] as const) {
+    await f.usage(percent)
+    await until(async () => (await f.record(a.id)).condition?.value === percent)
+    expect((await f.record(a.id)).fires).toBe(fires)
+    expect((await f.record(a.id)).condition?.armed).toBe(armed)
+  }
+})
+
 it('fires an idle condition only after the pause, at the threshold, and re-arms below the line', async () => {
   // The minute look is an interval: faked, so a tick runs when the test says.
   vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })

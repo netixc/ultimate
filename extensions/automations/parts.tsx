@@ -11,6 +11,7 @@ import {
 import { useEffect, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { api, cn, formatDuration, formatTime, useUltimate } from '@/sdk'
+import { rearmBelow } from './condition.ts'
 import { ListAction } from './refs.ts'
 import type { Automation, AutomationListItem, Run, Schedule } from './refs.ts'
 
@@ -238,7 +239,7 @@ export function stateLine(automation: Automation, now: number): string {
       ? condition.value === undefined
         ? 'context not seen yet'
         : `${Math.round(condition.value)}% now`
-      : `${automation.lastFireAt ? `fired ${clock(automation.lastFireAt, now)} · ` : ''}${condition.above > 10 ? `re-arms below ${condition.above - 10}%` : 're-arms after a compaction'}`
+      : `${automation.lastFireAt ? `fired ${clock(automation.lastFireAt, now)} · ` : ''}re-arms below ${rearmBelow(condition.above)}%`
   }
   if (automation.event && !attention(look) && look !== 'working')
     return automation.fires

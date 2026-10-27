@@ -33,6 +33,7 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
+import { rearmBelow } from './condition.ts'
 import { clock, full, until, words } from './parts.tsx'
 import { DefinitionsAction } from '../subagents/ui.tsx'
 import { CreateAction, DescribeAction, EventsAction, UpdateAction } from './refs.ts'
@@ -737,7 +738,7 @@ export function AutomationForm({
                     <p className="text-[11.5px] leading-relaxed text-muted-foreground">
                       {draft.idleHours > 0 &&
                         `Waits until you gave it no input for ${draft.idleHours === 1 ? 'an hour' : `${draft.idleHours} hours`}. `}
-                      Fires once, again after it drops below {draft.above - 10}% and{' '}
+                      Fires once, again after it drops below {rearmBelow(draft.above)}% and{' '}
                       {draft.cooldownMinutes === 60
                         ? 'an hour has'
                         : `${draft.cooldownMinutes} minutes have`}{' '}
