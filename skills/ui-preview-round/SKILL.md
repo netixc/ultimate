@@ -9,6 +9,12 @@ UI polish lands only when the user approved it on a running preview. Checks, a r
 approval, and one approval covers one round. On a hands-off goal @ultimate approves in the user's place, from your
 screenshots: send them with the request.
 
+Before reworking UI from supplied references or corrective feedback, study the relevant images and interaction
+code. Briefly record what stays, what changes, and what each action does, especially saving a draft versus sending
+it. Separate explicit requirements from your interpretation: a criticism of a bar is not permission to remove its
+workflow. Ask only when an ambiguity materially changes scope or behaviour. During verification, compare the same
+reference states, not just the new screen in isolation.
+
 1. **Commit the round** in your branch. A preview runs your checkout as it is on disk; committing keeps each round
    recoverable.
 2. **Start the preview**: `instance start` (or `instance start {subagent: <id>}` for a designer's worktree). It is a
