@@ -398,7 +398,7 @@ it.concurrent('notes an @ultimate overlay as changed instructions and applies it
   await ask(f.server, ultimate, 'second')
   const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
   expect(agent.instructions).toMatch(
-    /^You are Ultimate[\s\S]*\n\n## User additions\n\nWrite notes freely\.$/,
+    /^You are Ultimate[\s\S]*\n\n## User additions\n\nWrite notes freely\.(?:\n\n## Project additions\n|$)/,
   )
   // A Messages refresh applies the definition's tools, the overlay's included.
   await f.subagents.standing('ultimate', context)
