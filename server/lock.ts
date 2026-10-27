@@ -1,5 +1,7 @@
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
+import { exec } from '../lib/exec.ts'
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 export function alive(pid: number) {
@@ -21,16 +23,25 @@ export async function retireStorageOwner(path: string) {
   }
   const owner = await readOwner(path)
   if (!owner || !alive(owner.pid)) return
-  let command: string
+  let core: boolean
   try {
-    command = await readFile(`/proc/${owner.pid}/cmdline`, 'utf8')
+    if (process.platform === 'darwin') {
+      const { stdout } = await exec('/bin/ps', ['-ww', '-p', String(owner.pid), '-o', 'args='])
+      // ps flattens argv: only accept our exact launch command, not a core path embedded in an argument.
+      core =
+        stdout.trimEnd() ===
+        `${process.execPath} ${fileURLToPath(new URL('./main.ts', import.meta.url))}`
+    } else {
+      const command = await readFile(`/proc/${owner.pid}/cmdline`, 'utf8')
+      core = command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg))
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !alive(owner.pid)) return
+    if (!alive(owner.pid)) return
     throw new Error(`Cannot verify storage owner pid ${owner.pid}; refusing to signal it`, {
       cause: error,
     })
   }
-  if (!command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg)))
+  if (!core)
     throw new Error(`Storage owner pid ${owner.pid} is not an Ultimate core; refusing to signal it`)
   const signal = (name: NodeJS.Signals) => {
     try {

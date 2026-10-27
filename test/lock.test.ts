@@ -18,7 +18,9 @@ async function path() {
 it('refuses to signal an unverified owner of a held storage lock', async () => {
   const file = await path()
   locks.push(await acquireLock(file, { pid: process.pid }))
-  await expect(retireStorageOwner(file)).rejects.toThrow('refusing to signal')
+  await expect(retireStorageOwner(file)).rejects.toThrow(
+    `Storage owner pid ${process.pid} is not an Ultimate core; refusing to signal it`,
+  )
   expect(alive(process.pid)).toBe(true)
 })
 it('holds ownership until close, then lets a waiting contender acquire it', async () => {
