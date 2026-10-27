@@ -190,6 +190,7 @@ export default defineConfig({
   },
   fmt: { semi: false, singleQuote: true },
   test: {
+    reporters: ['default'],
     root: '.',
     globalSetup: ['test/sweep-temp.ts'],
     setupFiles: ['test/setup.ts'],
