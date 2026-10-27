@@ -169,7 +169,7 @@ never the user's.
 - **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `messages.remoteReply { key, text,
   failed, stopped? }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
   `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. The sender keeps each reply-enabled
-  tell in `board.remote` until its answer arrives (the log drops old messages), so a late answer still lands;
+  tell in `board.remote` until its answer arrives, so a late answer still lands;
   `remoteReply` refuses any other key, including a one-way tell's, and a second answer returns the first one's id.
   Two Ultimates therefore exchange at most a message and its answer per `tell`; continuing is a new `tell`.
 - **Not durable on the sender:** `tell` runs inside codemode, which is not replayed. A crash between logging and
@@ -187,7 +187,10 @@ violet accent no conversation uses.
 { messages: Message[]; next: number }
 ```
 
-`next` starts at 1. The log keeps the newest 300 items; transcripts retain delivered inputs.
+`next` starts at 1. On append, the log keeps all pending deliveries (`sent`) and unanswered requests
+(`delivered` with `reply: true`), plus the newest 300 completed items, in id order. Active messages may take the
+log beyond 300 items. Answered, dismissed, failed, stopped and delivered one-way messages count toward completed
+history; once handled, an old request is eligible for eviction on the next append. Transcripts retain delivered inputs.
 Version 1 remains loadable: Pi documents do not validate object fields, so existing logs' unused `readUpTo` field needs no migration.
 
 ```ts

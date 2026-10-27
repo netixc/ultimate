@@ -8,7 +8,12 @@ export async function append(tx: Tx, input: Omit<Message, 'id' | 'at'>) {
   const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
   log.messages.push(message)
-  if (log.messages.length > 300) log.messages.splice(0, log.messages.length - 300)
+  // Pending delivery and unanswered requests stay live; only completed history counts toward the cap.
+  let completed = 0
+  log.messages = log.messages
+    .toReversed()
+    .filter((m) => m.state === 'sent' || (m.state === 'delivered' && m.reply) || ++completed <= 300)
+    .toReversed()
   return message
 }
 export const terminal = {
