@@ -32,6 +32,7 @@ import pauseExtension, {
   docs as pauseDocs,
 } from '../extensions/pause/server.ts'
 import { Messages, MessageSent } from '../extensions/messages/api.ts'
+import { append } from '../extensions/messages/log.ts'
 import { UserInputEvent } from '../shared/events.ts'
 import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
@@ -894,7 +895,45 @@ it('loads existing version-1 logs with the unused read mark', async () => {
   await f.send('user', 'Still loadable')
   expect((await f.log())!.messages).toMatchObject([{ text: 'Still loadable' }])
 })
-it('bounds the log and exposes no user posting action', async () => {
+it('keeps old questions answerable while bounding completed history', async () => {
+  const f = await fixture()
+  await f.send('user', 'Keep it running?')
+  await f.send('user', 'Approve the preview?')
+  const [first, second] = (await f.log())!.messages
+  await f.opened.harness.commit(async (tx) => {
+    for (let i = 0; i < 350; i++)
+      await append(tx, {
+        from: 1,
+        to: 'user',
+        text: `Update ${i}`,
+        reply: false,
+        state: 'delivered',
+      })
+  }, context)
+  expect((await f.service().openQuestions(context)).map((m) => m.message)).toEqual([
+    first.id,
+    second.id,
+  ])
+  expect((await f.log())!.messages).toHaveLength(302)
+
+  await f.opened.close()
+  await f.open()
+  await f.service().answer(first.id, 'Yes, keep it running', context)
+  await f.opened.harness.waitForIdle(context)
+  expect((await f.log())!.messages).toContainEqual(
+    expect.objectContaining({ from: 'user', re: first.id, text: 'Yes, keep it running' }),
+  )
+  expect((await f.service().openQuestions(context)).map((m) => m.message)).toEqual([second.id])
+  // Once handled, even an old question is eligible for the completed-history cap.
+  expect((await f.log())!.messages.some((m) => m.id === first.id)).toBe(false)
+  await f.service().dismiss(second.id, context)
+  await f.opened.harness.waitForIdle(context)
+  expect(await f.service().openQuestions(context)).toEqual([])
+  expect((await f.log())!.messages.some((m) => m.id === second.id)).toBe(false)
+  await f.send('user', 'Finished', { reply: false })
+  expect((await f.log())!.messages).toHaveLength(300)
+})
+it('bounds completed history and exposes no user posting action', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
     const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
@@ -910,7 +949,7 @@ it('bounds the log and exposes no user posting action', async () => {
       })
     log.next = 301
   }, context)
-  await f.send('user', 'The newest')
+  await f.send('user', 'The newest', { reply: false })
   expect((await f.log())!.messages).toHaveLength(300)
   expect((await f.log())!.messages[0].id).toBe(2)
   expect((await f.log())!.messages.at(-1)).toMatchObject({ id: 301, text: 'The newest' })
