@@ -89,9 +89,10 @@ async function start() {
   const root = await temp('ultimate-trace-')
   await linkDependencies(root)
   await mkdir(join(root, 'web'))
+  // Tracing does not exercise reloads. On macOS, queued initial writes can restart Vite mid-import.
   await writeFile(
     join(root, 'vite.config.ts'),
-    "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
+    "export default { root: 'web', optimizeDeps: { noDiscovery: true }, server: { watch: null } }",
   )
   await mkdir(join(root, 'extensions'))
   await symlink(resolve('extensions/secrets'), join(root, 'extensions/secrets'))
