@@ -32,7 +32,7 @@ import { Transcript } from './transcript.tsx'
  * The bottom line with the `statusline.left` and `statusline.right` slots. On a touch screen of tablet width (an
  * unfolded foldable, a tablet) the page reaches the display's rounded corners, so the line's ends move in and up to
  * clear them. A phone keeps only the items marked `phone` on the line, moved in from the corners, and lists the
- * rest in a ⋯ popover. When the phone items crowd the line, they scroll sideways rather than shrink into each other.
+ * rest in a ⋯ popover.
  */
 export function StatusLine() {
   const phone = useViewport() === 'phone'
@@ -40,7 +40,7 @@ export function StatusLine() {
     <footer className="status-line flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground max-md:px-8 md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3">
       {phone ? (
         <>
-          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&>*]:shrink-0">
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">
             <Slot name="statusline.left" phone variant="inline" />
             <Slot name="statusline.right" phone variant="inline" />
           </div>
