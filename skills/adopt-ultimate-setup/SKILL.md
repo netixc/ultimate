@@ -33,27 +33,37 @@ Write only the picked pieces into the project's `.ultimate/`, merging into an ex
 files the project already has. Every piece is rewritten for this project: no text about Ultimate's code, conventions,
 commands or people may survive.
 
-- **Logins first.** Before pinning any model, list the models the user can run (codemode `ultimate.models()`) and pin
-  only those. Sol (`openai-codex/gpt-6.1-sol`) keeps `fast: true`; other models drop it. With one provider, use
-  different models or thinking levels per reviewer and say the team lost its model diversity.
+- **Model policy first.** Respect the user's chosen providers, then list available models (codemode
+  `ultimate.models()`) and pin only models within that policy with a login. Never introduce a fallback provider.
+  With one provider, use different models or thinking levels per reviewer and explain the reduced diversity.
+  Fast mode supports `openai/` and `openai-codex/`, not just Sol; use it only within the chosen policy and explain
+  its higher cost (`extensions/fast/README.md`). Other providers ignore definition `fast`.
 - **Review team.** Keep each reviewer's frontmatter shape (`tools: [read, bash]`), its fixed-range rules, P0–P3 levels
   and report format. Rewrite its focus: correctness names this project's real risks (from its code, tests and docs)
   instead of durability and replay; simplicity keeps its rules; architecture is rebuilt from the project's own
   `AGENTS.md`, `CLAUDE.md` or architecture docs, naming the project's patterns and where they live. With no such docs,
   offer to skip the architecture reviewer. Never add a `reviewer.md`: it would replace the lead.
-- **Coordinator model.** Recommend Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`, `thinking: high`), as the
-  README's "Recommended models" does, with its caveat: the Claude Code provider is experimental, depends on Claude
-  Code's protocol and account limits, and subscription coverage is not guaranteed. Pin it only with a Claude Code
-  login (⌘K → **Claude Code setup…** shows it); otherwise offer the strongest model they have, or skip the overlay.
+- **Coordinator model.** Within the chosen provider policy, recommend the strongest available model or skip the
+  overlay. If Claude Code is allowed, the README recommends Opus 5.5 (`claude-code/claude-opus-5-5`, `thinking: high`),
+  with its caveat: the provider is experimental, depends on Claude Code's protocol and account limits, and subscription
+  coverage is not guaranteed. Pin it only with a login (⌘K → **Claude Code setup…** shows it).
 - **Lander.** `checks` are the project's own check and test commands, found in its manifests and CI, in order (an
-  array runs as a concurrent group), each with a `timeout`. Add `push` only after the owner says yes, naming the
-  remote. The `agents/lander.md` overlay keeps `onFailure: fix` and a model they have; its `addTools` drop `restart`
-  and `instance`, and its body is rewritten from the project's docs: its checks, its remote, its rule for flaky
-  tests.
+  array runs as a concurrent group), each with a `timeout`. Add `push` with the owner's authorization (including
+  standing policy), naming the remote. The `agents/lander.md` overlay keeps `onFailure: fix` and a model they have;
+  its `addTools` drop `restart` and `instance`, and its body is rewritten from the project's docs: its checks, its
+  remote, its rule for flaky tests.
 - **Worktree setup.** Follow "Worktree setup" in `skills/integrate-ultimate/SKILL.md` (lockfile install, `.env`,
   database, dev port) and prove it in a scratch worktree as it describes.
 
 ## 3. Show and commit
+
+Before the first child/model execution, verify effective definitions with `ultimate.agents()` (the discovery
+checkpoint in `skills/integrate-ultimate/SKILL.md`) and both fast layers: per-agent `fast` and effective model-wide
+`fastModels` (project replaces user). The toolbar reflects the latter, not definition-only fast; check `fast`'s
+`status` action too. An isolated `ULTIMATE_HOME` keeps user configuration; a fresh `HOME` may lose it and logins.
+Configuration/discovery checks need no paid probe. For provider-dependent behaviour, a preview's `instance.model`
+overrides pins: use a supervised real-provider smoke test instead (`docs/running.md`; when developing Ultimate
+itself, `.ultimate/skills/ultimate-provider-smoke/SKILL.md`), within the chosen provider policy.
 
 Run `git diff` (and `git status` for new files) on `.ultimate/`, show the user the result in your message, and commit
 after they agree. A run of the review team on a recent commit range is a cheap first proof; offer it.

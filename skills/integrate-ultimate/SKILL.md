@@ -14,7 +14,7 @@ Work in three phases. Do not build anything before the user has chosen.
 Gather evidence, citing file:line, before forming opinions.
 
 - **Identity:**
-  - the remote and whether it is private, since that decides whether to push after building;
+  - the remote, visibility and owner's push policy, including standing authorization;
   - what the project is;
   - the stack and its real versions (manifests win over docs; READMEs and agent docs are often stale).
 - **How it runs:**
@@ -87,6 +87,13 @@ Worker reports and submissions state divergence from the task as given (agreemen
   tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
   `extensions/workspaces/README.md`.
 
+Before promising checked and pushed delivery, verify the target host's project choice and effective **project**
+`lander.checks` and `lander.push`. The lander reads only `host.projectSettings()`; user lander settings do not apply,
+and unchosen project settings are empty (`docs/settings.md`, `server/project-setup.ts`,
+`extensions/workspaces/lander.ts` `landerSettings`). A settings file on disk alone proves nothing.
+Project choice belongs to the user: use the supported onboarding/Extensions UI, never write trust files or bypass
+user-only actions through an API. Already-authorized routine checks, submission and push need no new permission.
+
 ## Worktree setup
 
 Every coordinator, worktree subagent and the lander works in a fresh `git worktree`, which has none of the
@@ -150,14 +157,32 @@ settings apply live; nothing needs a restart.
   - Extensions outside the clone import what built-ins import (`@/sdk`, `@/components/…`, clone packages), and nothing type-checks them.
   - Keep the project's own tooling (type check, lint, format) from scanning `.ultimate/`.
   - A worktree's `.ultimate/` does not hot-reload the running host. Preview it with `instance start`: a clean instance (every agent on `instance.model`) that runs the worktree as its project and loads its `.ultimate/extensions`.
-- **Verify against the real project**, not a copy of Ultimate: the preview above, or a temporary `HOME` with the project trusted (`~/.ultimate/trust.json`) and onboarding done, then `node <clone>/bin/ultimate.ts <project> --port <free> --no-open`.
+- **Verify agent discovery** using the existing frontmatter/overlay schema in `extensions/subagents/README.md`
+  (`lib/agents.ts` implements it). Every definition and overlay needs explicit `name` frontmatter; overlays need
+  `addTools` (`[]` for settings only), never `tools`.
+  On the target host, inspect codemode `ultimate.agents()`: resolve `errors` and confirm the expected **effective**
+  definitions, overlays, models and tools before claiming setup works. Discovery needs no model call.
+- **Verify against the real project**, not a copy of Ultimate: use the preview above, or a supervised scratch server
+  with its own `ULTIMATE_HOME` and free port (`docs/running.md`). This isolates state, not user configuration.
+  A genuinely fresh `HOME` can lose provider logins, model/fast settings and project choice; verify those before any
+  model execution. Let the user choose the project through the UI when required, not by seeding trust files.
   - Check the extension info for load errors.
   - Call the actions.
   - Open the surfaces in a browser and take screenshots.
   - Never spend money or deploy while verifying.
-- **Commit** in the project repository: push if it is private and the owner's policy is to push; ask first if it is public or shared.
+- **Commit** in the project repository and deliver under the owner's authorized policy, public or private.
+  After `workspace submit`, inspect the actual check steps and push receipt (`extensions/workspaces/README.md`),
+  then verify the remote branch SHA matches the landed SHA. If it advanced, confirm the landed SHA is included.
+  A local-only landing is not completed delivery when checks and push were promised; report missing evidence.
 - **Hand off:**
   - how to start it (`ultimate` in the folder);
   - what onboarding will ask;
   - what each surface does;
   - which secrets to add in the Secrets panel.
+
+When genuine user action is needed, discover the **target host's** actual ready URL from system/access status or
+instance output; use the reachable-link pattern in `skills/ui-preview-round/SKILL.md` (tailnet URL when available).
+Verify the route and give remote users the exact reachable conversation/card link, not a localhost address or a
+guessed hostname/port. If no usable route exists, say so; never enable remote access or broaden allowlists for them.
+Before repeating execution or reminders, reconcile newer delivery receipts and landing results with the request:
+a stale handoff is not a new task, and an acknowledged delivery must not be sent again.
