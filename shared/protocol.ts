@@ -16,6 +16,8 @@ export const maxImages = 4
 
 export interface SubmitRequest {
   text: string
+  /** Conversation-scoped retry key: a non-empty string of at most 128 characters. */
+  requestId?: string
   images?: { data: string; mimeType: string }[]
   whenBusy?: 'steer' | 'followUp'
 }

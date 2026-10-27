@@ -73,6 +73,14 @@ import { registry, store } from '../../web/src/sdk/client.ts'
 import { ConversationScope } from '../../web/src/sdk/conversation-scope.tsx'
 import { Conversation } from '../../web/src/app/primitives.tsx'
 import {
+  ComposerAttachmentAdapter,
+  useComposerAttachments,
+} from '../../web/src/sdk/composer-attachments.tsx'
+import type {
+  ComposerAttachmentController,
+  ComposerSubmission,
+} from '../../web/src/sdk/composer-attachments.tsx'
+import {
   getConversation,
   TranscriptContext,
   useAction,
@@ -331,6 +339,62 @@ it('adds a view to a document-only stream and keeps documents after the scope re
   expect(store.getState().viewsOf[23]).toBeUndefined()
   both.send('docOps', { kind: counter.kind, ops: [['s', ['n'], 3]] })
   expect(store.getState().docsOf[23]?.[counter.kind]).toEqual({ n: 3 })
+})
+
+it('keeps uploading and failed attachments in their draft, blocks send, and clears only the accepted draft', async () => {
+  const controllers = new Map<number, ComposerAttachmentController>()
+  const submit = vi.fn<(input: ComposerSubmission) => Promise<unknown>>()
+  submit
+    .mockRejectedValueOnce(new Error('Upload submission failed'))
+    .mockResolvedValue({ submissionId: 1 })
+  await registry.setLoaders({
+    '/extensions/attachments/web.tsx': async () => ({
+      default: {
+        composer: ({ core }: { core: ReactNode }) =>
+          h(ComposerAttachmentAdapter, { submit, children: core }),
+        slots: {
+          'composer.attachments': () => {
+            const controller = useComposerAttachments()
+            controllers.set(controller.conversationId!, controller)
+            return h('output', null, controller.attachments.map((item) => item.name).join(', '))
+          },
+        },
+      },
+    }),
+  })
+  for (const id of [31, 33]) effects.push(store.watchConversation(id))
+  await tick()
+  for (const id of [31, 33])
+    source(id).send('view', {
+      ...view(id, 'conversation'),
+      docs: { ...view(id, 'conversation').docs, 'pi.inbox': { items: [] } },
+    })
+  const render = (id: number) => renderToStaticMarkup(scoped(id, h(Conversation)))
+  render(31)
+  const first = controllers.get(31)!
+  first.setAttachments(() => [{ id: 'upload', name: 'notes.txt', size: 12, status: 'uploading' }])
+  render(31)
+  harness.submit!()
+  await tick()
+  expect(submit).not.toHaveBeenCalled()
+  render(33)
+  const second = controllers.get(33)!
+  second.setAttachments(() => [{ id: 'other', name: 'other.txt', size: 2, status: 'ready' }])
+  // An upload finishing after navigation still updates the first draft, not the new editor.
+  first.setAttachments((files) => files.map((file) => ({ ...file, status: 'ready' })))
+  expect(render(31)).toContain('notes.txt')
+  harness.submit!()
+  await tick()
+  expect(render(31)).toContain('Upload submission failed')
+  expect(controllers.get(31)!.attachments[0].id).toBe('upload')
+  const failedId = submit.mock.calls[0][0].requestId
+  harness.submit!()
+  await tick()
+  expect(submit.mock.calls[1][0].requestId).toBe(failedId)
+  render(31)
+  expect(controllers.get(31)!.attachments).toEqual([])
+  render(33)
+  expect(controllers.get(33)!.attachments[0].id).toBe('other')
 })
 
 function Action() {

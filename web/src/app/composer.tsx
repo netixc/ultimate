@@ -30,6 +30,12 @@ import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { storeImages, storedImages } from './draft-images.ts'
+import { storeAttachments, storedAttachments, validateAttachments } from './draft-attachments.ts'
+import {
+  ComposerAttachmentContext,
+  ComposerAttachmentSubmitContext,
+} from '../sdk/composer-attachments.tsx'
+import type { ComposerAttachmentState } from '../sdk/composer-attachments.tsx'
 import {
   atFirstLine,
   mergedSteer,
@@ -173,9 +179,9 @@ export function Composer({ dock }: { dock?: boolean }) {
   return <TranscriptContext value={entries}>{core}</TranscriptContext>
 }
 
-type Draft = {
+type Draft = ComposerAttachmentState & {
   text: string
-  images: { data: string; mimeType: string }[]
+  requestId: string
   error?: string
   sending: boolean
   revision: number
@@ -188,6 +194,8 @@ function createDraft(id: number | string | undefined) {
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
     images: key ? storedImages(key) : [],
+    attachments: key ? storedAttachments(key) : [],
+    requestId: crypto.randomUUID(),
     sending: false,
     revision: 0,
   }
@@ -202,9 +210,13 @@ function createDraft(id: number | string | undefined) {
       }
     },
     set: (change: Partial<Draft>) => {
-      const images = value.images
+      const previous = value
       value = { ...value, ...change }
-      if (key && value.images !== images) storeImages(key, value.images)
+      if (change.revision !== undefined && change.revision !== previous.revision)
+        value.requestId = crypto.randomUUID()
+      if (key && value.images !== previous.images) storeImages(key, value.images)
+      if (key && value.attachments !== previous.attachments)
+        storeAttachments(key, value.attachments)
       for (const listener of listeners) listener()
     },
   }
@@ -254,12 +266,24 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const queued = inbox.filter((item) => item.mode !== 'write')
   const scoped = useContext(ConversationIdContext)
   const target = useContext(ComposerTargetContext)
+  const attachmentSubmit = useContext(ComposerAttachmentSubmitContext)
   const intro = useIntro()
   const draft = getDraft(id)
-  const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
+  const { text, images, attachments, error, sending } = useSyncExternalStore(
+    draft.subscribe,
+    draft.get,
+  )
   const setError = (message: string | undefined) => draft.set({ error: message })
+  const updateAttachments = (
+    change: (current: ComposerAttachmentState) => ComposerAttachmentState,
+  ) => {
+    const current = draft.get()
+    const next = change(current)
+    validateAttachments(next)
+    draft.set({ ...next, revision: current.revision + 1 })
+  }
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
-    draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
+    updateAttachments((current) => ({ ...current, images: change(current.images) }))
   const { paste, reading, pending } = useImagePaste({
     images,
     setImages,
@@ -279,14 +303,20 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     else localStorage.removeItem(key)
   }
   const blocked = loading ? undefined : blockedBy(agent, models)
-  const empty = !text.trim() && images.length === 0
+  const empty = !text.trim() && images.length === 0 && attachments.length === 0
+  const attachmentsPending = attachments.some((file) => file.status !== 'ready')
 
   async function send(whenBusy?: 'steer' | 'followUp') {
     if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
       return
     const submitted = draft.get()
-    if (target && images.length) {
-      setError('Images stay here: remove them to send elsewhere')
+    if (submitted.attachments.some((file) => file.status !== 'ready')) return
+    if (submitted.attachments.length && !attachmentSubmit) {
+      setError('The attachment extension is unavailable. Remove the files or enable it to send.')
+      return
+    }
+    if (target && (images.length || attachments.length)) {
+      setError('Attachments stay here: remove them to send elsewhere')
       return
     }
     draft.set({ sending: true, error: undefined })
@@ -301,17 +331,31 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         if (previous) input = mergedSteer(previous, input)
         // Sending means following the run from here, wherever the reader had scrolled to.
         events.emit('ultimate:sent', { conversationId: id })
-        await api.submit(input.text, mode, id, input.images)
+        const fallback = () => api.submit(input.text, mode, id, input.images)
+        if (attachmentSubmit)
+          await attachmentSubmit(
+            {
+              ...input,
+              attachments: submitted.attachments,
+              whenBusy: mode,
+              requestId: submitted.requestId,
+              conversationId: id,
+            },
+            fallback,
+          )
+        else await fallback()
       }
       clearDraft(draft, submitted)
       if (draft.get().images === submitted.images) draft.set({ images: [] })
+      if (draft.get().attachments === submitted.attachments) draft.set({ attachments: [] })
+      draft.set({ requestId: crypto.randomUUID() })
     } catch (failure) {
       if (key && draft.get().revision === submitted.revision)
         draft.set({ text: localStorage.getItem(key) ?? '' })
       // A steer withdrawn for a merge that then failed to send would be lost: it comes back into the draft.
       if (previous) {
         update(mergedSteer(previous, { text: draft.get().text, images: [] }).text)
-        setImages((current) => [...previous!.images, ...current])
+        draft.set({ images: [...previous.images, ...draft.get().images] })
       }
       setError(errorMessage(failure))
     } finally {
@@ -325,7 +369,8 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     try {
       const recalled = await recallQueued(api, id, queued)
       update(recalledText(draft.get().text, recalled))
-      setImages((current) => [...current, ...recalled.flatMap((input) => input.images)])
+      // Recovery must not discard already accepted inputs, even if together they exceed one new message's limit.
+      draft.set({ images: [...draft.get().images, ...recalled.flatMap((input) => input.images)] })
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -352,93 +397,113 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
 
   return (
     // Only the shown conversation's composer takes typing shortcuts (Escape, Shift+Tab): they act on that conversation.
-    <div
-      data-composer-target={scoped === undefined ? 'conversation' : 'scope'}
-      className={cn(column(dock), 'pb-2')}
+    <ComposerAttachmentContext
+      value={{
+        conversationId: id,
+        images,
+        attachments,
+        disabled: loading || sending || reading,
+        update: updateAttachments,
+        setImages,
+        setAttachments: (change) =>
+          updateAttachments((current) => ({
+            ...current,
+            attachments: change(current.attachments),
+          })),
+        setError,
+      }}
     >
-      <Inbox items={inbox} />
-      <PromptInput
-        onSubmit={(event) => {
-          event.preventDefault()
-          // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
-          void send()
-        }}
+      <div
+        data-composer-target={scoped === undefined ? 'conversation' : 'scope'}
+        className={cn(column(dock), 'pb-2')}
       >
-        <ImagePreviews
-          images={images}
-          disabled={loading || sending || reading}
-          remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
-        />
-        <PromptInputTextarea
-          autoFocus={!touchKeyboard()}
-          readOnly={loading || sending}
-          onPaste={(event) => void paste(event)}
-          id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
-          data-conversation={id}
-          onChange={(event) => update(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={
-            target?.placeholder ??
-            (busy
-              ? 'Steer the run, or queue a follow-up…'
-              : (intro?.placeholder ?? 'Ask Ultimate to change something…'))
-          }
-          value={text}
-        />
-        <PromptInputFooter className="@container">
-          {/* The toolbar gives way first, so Send and the composer actions always stay in reach. */}
-          <PromptInputTools className="overflow-hidden">
-            <Slot name="composer.toolbar" variant="inline" />
-          </PromptInputTools>
-          <div className="flex max-w-full min-w-0 shrink-0 items-center gap-2">
-            <span
-              className={cn(
-                'truncate font-mono text-[11px]',
-                error || blocked ? 'text-error' : 'text-muted-foreground/70',
-              )}
-            >
-              {error ??
-                blocked ??
-                (busy && !target ? (
-                  <span className="pointer-coarse:hidden">
-                    <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
-                  </span>
-                ) : null)}
-            </span>
-            {!target && <Slot name="composer.actions" variant="inline" />}
-            {busy && (
-              <PromptInputSubmit
-                mode="stop"
-                onClick={() =>
-                  void api.abort(id).catch((failure: Error) => setError(failure.message))
-                }
-                title="Stop (Esc)"
-              />
-            )}
-            {(!busy || !empty) && (
-              <PromptInputSubmit
-                disabled={loading || empty || !!blocked || sending || reading}
-                aria-label={loading ? 'Loading conversation' : 'Send'}
-                title={
-                  loading
-                    ? 'Loading conversation'
-                    : busy && !target
-                      ? 'Steer (Enter)'
-                      : 'Send (Enter)'
-                }
-                className={loading ? 'bg-muted text-muted-foreground' : undefined}
+        <Inbox items={inbox} />
+        <PromptInput
+          onSubmit={(event) => {
+            event.preventDefault()
+            // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
+            void send()
+          }}
+        >
+          <ImagePreviews
+            images={images}
+            disabled={loading || sending || reading}
+            remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
+          />
+          <Slot name="composer.attachments" />
+          <PromptInputTextarea
+            autoFocus={!touchKeyboard()}
+            readOnly={loading || sending}
+            onPaste={(event) => void paste(event)}
+            id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
+            data-conversation={id}
+            onChange={(event) => update(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={
+              target?.placeholder ??
+              (busy
+                ? 'Steer the run, or queue a follow-up…'
+                : (intro?.placeholder ?? 'Ask Ultimate to change something…'))
+            }
+            value={text}
+          />
+          <PromptInputFooter className="@container">
+            {/* The toolbar gives way first, so Send and the composer actions always stay in reach. */}
+            <PromptInputTools className="overflow-hidden">
+              <Slot name="composer.toolbar" variant="inline" />
+            </PromptInputTools>
+            <div className="flex max-w-full min-w-0 shrink-0 items-center gap-2">
+              <span
+                className={cn(
+                  'truncate font-mono text-[11px]',
+                  error || blocked ? 'text-error' : 'text-muted-foreground/70',
+                )}
               >
-                {loading ? (
-                  <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
-                ) : undefined}
-              </PromptInputSubmit>
-            )}
-          </div>
-        </PromptInputFooter>
-      </PromptInput>
-      <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
-        <Slot name="composer.status" variant="inline" />
+                {error ??
+                  blocked ??
+                  (busy && !target ? (
+                    <span className="pointer-coarse:hidden">
+                      <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
+                    </span>
+                  ) : null)}
+              </span>
+              {!target && <Slot name="composer.actions" variant="inline" />}
+              {busy && (
+                <PromptInputSubmit
+                  mode="stop"
+                  onClick={() =>
+                    void api.abort(id).catch((failure: Error) => setError(failure.message))
+                  }
+                  title="Stop (Esc)"
+                />
+              )}
+              {(!busy || !empty) && (
+                <PromptInputSubmit
+                  disabled={
+                    loading || empty || !!blocked || sending || reading || attachmentsPending
+                  }
+                  aria-label={loading ? 'Loading conversation' : 'Send'}
+                  title={
+                    loading
+                      ? 'Loading conversation'
+                      : busy && !target
+                        ? 'Steer (Enter)'
+                        : 'Send (Enter)'
+                  }
+                  className={loading ? 'bg-muted text-muted-foreground' : undefined}
+                >
+                  {loading ? (
+                    <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
+                  ) : undefined}
+                </PromptInputSubmit>
+              )}
+            </div>
+          </PromptInputFooter>
+        </PromptInput>
+        <div className="flex items-center gap-3 overflow-hidden pt-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground empty:hidden">
+          <Slot name="composer.status" variant="inline" />
+        </div>
       </div>
-    </div>
+    </ComposerAttachmentContext>
   )
 }

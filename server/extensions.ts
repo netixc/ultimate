@@ -18,7 +18,13 @@ import type {
   JsonObject,
 } from '@earendil-works/pi-durable'
 import type { ViteDevServer } from 'vite-plus'
-import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
+import type {
+  ConversationSummary,
+  ExtensionInfo,
+  SubmitRequest,
+  SubmitResponse,
+  SystemInfo,
+} from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -31,6 +37,8 @@ import { extensionApis } from './extension-apis.ts'
 import type { TraceReader } from './trace.ts'
 import type { Api, Catalogue } from '../shared/extension-api.ts'
 import type { Device } from '../shared/events.ts'
+import { submitInput } from './submit.ts'
+import type { SubmitContext } from './submit.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -70,6 +78,12 @@ export type ExtensionHost = Pick<
   onRelease(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
+  /** Admit typed user input with the core validation, skill expansion and user.input event. */
+  submit(
+    conversationId: number,
+    request: SubmitRequest,
+    context: SubmitContext,
+  ): Promise<SubmitResponse>
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
   conversations(): ConversationSummary[]
@@ -255,6 +269,8 @@ export async function loadExtensions(
   const userActions = new Map<string, string[]>()
   /** Read-only actions a surface polls: the trace counts their successful calls instead of writing them. */
   const pollActions = new Map<string, string[]>()
+  /** Actions whose arguments and results must not be stored in the trace. */
+  const sealedActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
   /** Each loaded extension's folder with symlinks resolved, where Vite keys its modules. */
@@ -289,29 +305,34 @@ export async function loadExtensions(
       throw new Error('Invalid conversationId')
     const call = { caller, callee: name, name: `${name}/${action}`, args, conversationId }
     const poll = pollActions.get(name)?.includes(action)
-    return trace.run({ kind: 'action', ...call, ...(poll ? { poll } : {}) }, () =>
-      fn(args, {
-        host: facetHosts.get(name)!,
-        conversationId,
-        ...(device ? { device } : {}),
-        signal,
-        exec: async (command, commandArgs, options) => {
-          const agent =
-            conversationId === undefined
-              ? undefined
-              : await runtime
-                  .harness()
-                  .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
-          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
-            command,
-            commandArgs,
-            options,
-          )
-        },
-      }),
+    const sealed = sealedActions.get(name)?.includes(action)
+    return trace.run(
+      { kind: 'action', ...call, ...(poll ? { poll } : {}), ...(sealed ? { sealed } : {}) },
+      () =>
+        fn(args, {
+          host: facetHosts.get(name)!,
+          conversationId,
+          ...(device ? { device } : {}),
+          signal,
+          exec: async (command, commandArgs, options) => {
+            const agent =
+              conversationId === undefined
+                ? undefined
+                : await runtime
+                    .harness()
+                    .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
+            return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+              command,
+              commandArgs,
+              options,
+            )
+          },
+        }),
     )
   }
   const extensionHost: ExtensionHost = {
+    submit: (conversationId, request, context) =>
+      submitInput(host, runtime.harness(), conversationId, request, context),
     invoke: async (name, action, args, signal, conversationId) => {
       if (userActions.get(name)?.includes(action))
         throw new Error(`${name}/${action} is a user-only action`)
@@ -452,6 +473,7 @@ export async function loadExtensions(
     actions.delete(name)
     userActions.delete(name)
     pollActions.delete(name)
+    sealedActions.delete(name)
     settingsReloads.delete(name)
   }
   let closed = false
@@ -564,6 +586,14 @@ export async function loadExtensions(
             )
           )
             throw new Error('pollActions must contain registered action names')
+          const exportedSealedActions: unknown = module.sealedActions ?? []
+          if (
+            !Array.isArray(exportedSealedActions) ||
+            exportedSealedActions.some(
+              (action) => typeof action !== 'string' || !Object.hasOwn(exportedActions, action),
+            )
+          )
+            throw new Error('sealedActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
           // Pi lets the last extension win a tool name silently. A later source layer overriding a tool on purpose is
           // fine (a project's bash over coding-tools); within one layer, the extension holding the name keeps it.
@@ -588,6 +618,7 @@ export async function loadExtensions(
           actions.set(name, exportedActions)
           userActions.set(name, exportedUserActions)
           pollActions.set(name, exportedPollActions)
+          sealedActions.set(name, exportedSealedActions)
           if (module.reloadOnSettings === true) settingsReloads.add(name)
           else settingsReloads.delete(name)
           record.actions = Object.keys(exportedActions)

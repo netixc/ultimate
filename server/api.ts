@@ -8,9 +8,9 @@ import type {
   SubmissionId,
 } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
-import { UI_REVISION, imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
+import { UI_REVISION } from '../shared/protocol.ts'
 import { listModels } from './models.ts'
-import { expandSkillCommand } from './skills.ts'
+import { SubmitError, submitInput } from './submit.ts'
 import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
@@ -20,8 +20,7 @@ import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
-import { EVENT_LOG_LABEL, emit } from './events.ts'
-import { UserInputEvent } from '../shared/events.ts'
+import { EVENT_LOG_LABEL } from './events.ts'
 import { admit, deviceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
@@ -73,9 +72,16 @@ function reply(response: ServerResponse, status: number, data: unknown) {
 }
 function failed(response: ServerResponse, error: unknown) {
   if (!response.headersSent)
-    reply(response, error instanceof HttpError ? error.status : 500, {
-      error: error instanceof HttpError ? error.message : 'Request failed',
-    })
+    reply(
+      response,
+      error instanceof HttpError || error instanceof SubmitError ? error.status : 500,
+      {
+        error:
+          error instanceof HttpError || error instanceof SubmitError
+            ? error.message
+            : 'Request failed',
+      },
+    )
   else response.destroy()
 }
 /** Start a server-sent event stream; `end` stops its heartbeat and closes it. */
@@ -496,85 +502,22 @@ export async function createApi(
           url.pathname,
         )
         if (match) {
+          if (match[2] === 'submit') {
+            json(
+              202,
+              await submitInput(host, harness, Number(match[1]), data, {
+                context,
+                device: deviceOf(request.headers),
+              }),
+            )
+            return true
+          }
           const conversation = await harness.conversation(
             Number(match[1]) as ConversationId,
             context,
           )
           if (!conversation) throw new HttpError(404, 'Unknown conversation')
           switch (match[2]) {
-            case 'submit': {
-              if (
-                data.whenBusy !== undefined &&
-                data.whenBusy !== 'steer' &&
-                data.whenBusy !== 'followUp'
-              )
-                throw new HttpError(400, 'Invalid whenBusy')
-              if (typeof data.text !== 'string') throw new HttpError(400, 'Expected text')
-              const length = data.text.length
-              const images = data.images === undefined ? [] : data.images
-              if (!Array.isArray(images)) throw new HttpError(400, 'Expected images array')
-              if (images.length > maxImages) throw new HttpError(413, `At most ${maxImages} images`)
-              const blocks = images.map((image: unknown) => {
-                if (!image || typeof image !== 'object') throw new HttpError(400, 'Invalid image')
-                const { data: encoded, mimeType } = image as Record<string, unknown>
-                if (
-                  typeof mimeType !== 'string' ||
-                  !imageMimeTypes.includes(mimeType) ||
-                  typeof encoded !== 'string' ||
-                  !encoded ||
-                  encoded.length % 4 !== 0 ||
-                  !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
-                )
-                  throw new HttpError(400, 'Expected supported image MIME type and base64 data')
-                if (Buffer.byteLength(encoded, 'base64') > maxImageBytes)
-                  throw new HttpError(413, 'Image exceeds 2 MiB')
-                if (Buffer.from(encoded, 'base64').toString('base64') !== encoded)
-                  throw new HttpError(400, 'Invalid image base64 data')
-                return { type: 'image' as const, data: encoded, mimeType }
-              })
-              if (!data.text.trim() && !blocks.length)
-                throw new HttpError(400, 'Expected text or images')
-              // `/skill:name args` sends the skill's instructions with the request, as Pi does.
-              const expanded = data.text.startsWith('/skill:')
-                ? expandSkillCommand(
-                    data.text,
-                    host.skills((await conversation.agent(context)).cwd ?? host.projectRoot),
-                  )
-                : data.text
-              const content = blocks.length
-                ? [
-                    ...(expanded.trim() ? [{ type: 'text' as const, text: expanded }] : []),
-                    ...blocks,
-                  ]
-                : expanded
-              const submission = await conversation.submit(
-                { type: 'input', content, whenBusy: data.whenBusy },
-                context,
-              )
-              // Pi admits the input in a commit with no hook for steers and follow-ups, so the event commits right
-              // after it: a crash in between loses the event, never the input.
-              const admitted = await submission.status(context)
-              await harness.commit(
-                (tx) =>
-                  emit(tx, UserInputEvent, {
-                    conversation: conversation.id,
-                    kind:
-                      admitted.status !== 'queued'
-                        ? 'prompt'
-                        : data.whenBusy === 'steer'
-                          ? 'steer'
-                          : 'follow-up',
-                    ...(admitted.entry === undefined
-                      ? { submission: submission.id }
-                      : { entry: admitted.entry }),
-                    length,
-                    ...deviceOf(request.headers),
-                  }),
-                context,
-              )
-              json(202, { submissionId: submission.id })
-              break
-            }
             case 'abort': {
               // Stop aborts the conversation's own tasks (each cascades to the work it owns) instead of calling
               // Conversation.abort(), which also withdraws queued inputs: queued follow-ups stay, and Pi places them

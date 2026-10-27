@@ -179,6 +179,9 @@ async function fixture(
       harness: () => {
         throw new Error('Not used')
       },
+      submit: () => {
+        throw new Error('Not used')
+      },
       system: () => {
         throw new Error('Not used')
       },

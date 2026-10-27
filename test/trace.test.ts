@@ -29,7 +29,10 @@ const Worked = defineEvent('beta.worked')`
 const extensions = {
   alpha: `${tokens}
 export default defineExtension({ name: 'alpha' })
+export const sealedActions = ['private']
 export const actions = {
+  private: async (args) => ({ echoed: args }),
+  ordinary: async (args) => ({ echoed: args }),
   go: async (args, { host }) => host.need(Beta).work(args),
   recent: async (_args, { host }) => host.eventLog.recent({ events: [Worked] }),
   fail: async (_args, { host }) => {
@@ -109,6 +112,22 @@ async function start() {
     )
   return server
 }
+it('seals only named action arguments and results while ordinary actions retain them', async () => {
+  const server = await start()
+  for (const action of ['private', 'ordinary'])
+    expect(await server.extensions.invoke('alpha', action, { text: 'payload' }, signal)).toEqual({
+      echoed: { text: 'payload' },
+    })
+  const rows = server.extensions.trace.query({}).filter((row) => row.kind === 'action')
+  expect(rows.find((row) => row.name === 'alpha/private')).toMatchObject({ ok: true })
+  expect(rows.find((row) => row.name === 'alpha/private')?.args).toBeUndefined()
+  expect(rows.find((row) => row.name === 'alpha/private')?.result).toBeUndefined()
+  expect(rows.find((row) => row.name === 'alpha/ordinary')).toMatchObject({
+    args: JSON.stringify({ text: 'payload' }),
+    result: JSON.stringify({ echoed: { text: 'payload' } }),
+  })
+})
+
 const signal = new AbortController().signal
 const call = (name: string): Call => ({ kind: 'service', caller: 'a', callee: 'b', name })
 /** Names of a tree, nested like it. */

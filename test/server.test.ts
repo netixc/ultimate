@@ -467,6 +467,55 @@ export default host => { host.resource('cleanup.process',()=>{
     }
     await server.root.abort(context)
   })
+  it('shares typed submit admission and idempotent receipts between host and HTTP', async () => {
+    const { server, options } = await fixture(false, {
+      relay: `import { defineExtension } from '@earendil-works/pi-durable'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+export default defineExtension({ name: 'relay' })
+export const actions = {
+  submit: async (args, { host, conversationId, device }) =>
+    host.submit(conversationId, args, { context: BACKGROUND_CONTEXT, device }),
+}`,
+    })
+    const skill = join(options.ultimateRoot, 'skills/probe')
+    await mkdir(skill, { recursive: true })
+    await writeFile(
+      join(skill, 'SKILL.md'),
+      '---\nname: probe\ndescription: Check typed submission.\n---\nUse the shared submit path.',
+    )
+    server.host.faux!.setResponses([fauxAssistantMessage('Done.'), fauxAssistantMessage('Done.')])
+    const input = { text: '/skill:probe go', requestId: 'submit-retry' }
+    const throughHost = await post(server, '/api/extensions/relay/actions/submit', {
+      conversationId: 1,
+      args: input,
+    })
+    expect(throughHost.status).toBe(200)
+    expect(throughHost.data).toEqual({ result: { submissionId: expect.any(Number) } })
+    const throughHttp = await post(server, '/api/conversations/1/submit', input)
+    expect(throughHttp).toEqual({ status: 202, data: throughHost.data.result })
+    await server.harness.waitForIdle(context)
+    const second = { text: 'Next input', requestId: 'http-retry' }
+    const httpFirst = await post(server, '/api/conversations/1/submit', second)
+    expect(httpFirst.status).toBe(202)
+    expect(
+      await post(server, '/api/extensions/relay/actions/submit', {
+        conversationId: 1,
+        args: second,
+      }),
+    ).toEqual({ status: 200, data: { result: httpFirst.data } })
+    expect(httpFirst.data.submissionId).not.toBe(throughHttp.data.submissionId)
+    await server.harness.waitForIdle(context)
+    const inputs = (await server.root.entries({}, 100, undefined, context)).items.filter(
+      (entry) => entry.kind === 'pi.user',
+    )
+    expect(inputs).toHaveLength(2)
+    expect(JSON.stringify(inputs)).toContain('Use the shared submit path.')
+    const events = await eventHost(() => server.harness, 'test').eventLog.recent({
+      events: [UserInputEvent],
+    })
+    expect(events).toHaveLength(4)
+    expect(events.every((event) => event.data.conversation === 1)).toBe(true)
+  })
   it('records each typed input as one user.input event with its device and never its text', async () => {
     const { server } = await fixture()
     server.host.faux!.setResponses([held])

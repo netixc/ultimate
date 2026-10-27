@@ -1,5 +1,6 @@
 import type { ImageContent, TextContent, UserMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
+import type { ReactNode } from 'react'
 import { MentionText, Message, MessageContent } from '@/components/ai/message'
 import { MessageResponse } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolImage, ToolSection } from '@/components/ai/tool'
@@ -70,10 +71,15 @@ export function UserView({
   entry,
   message,
   text = textOf(message.content),
+  actionText = text,
+  children,
 }: {
   entry: EntryRecord
   message: UserMessage
   text?: string
+  /** Keep the source text for copy and recall when an extension renders some of it as attachments. */
+  actionText?: string
+  children?: ReactNode
 }) {
   const images =
     typeof message.content === 'string'
@@ -87,6 +93,7 @@ export function UserView({
         <MessageContent>
           {skill && <SkillRun {...skill} />}
           {(!skill || skill.request) && <UserText text={skill ? skill.request : text} />}
+          {children}
           {images.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {images.map((image, index) => (
@@ -104,7 +111,7 @@ export function UserView({
       <MessageActions
         className="-mt-1 justify-end"
         entry={entry}
-        text={text}
+        text={actionText}
         timestamp={message.timestamp}
       />
     </Message>
