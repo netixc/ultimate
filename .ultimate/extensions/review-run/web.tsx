@@ -168,6 +168,7 @@ function Member({ member }: { member: ReviewStatus['members'][number] }) {
           </summary>
           <ul className="mt-1 space-y-1 pl-4">
             {member.failures.map((failure, index) => (
+              // oxlint-disable-next-line react/no-array-index-key -- Failures are an append-only log and may repeat.
               <li className="break-words whitespace-pre-wrap" key={index}>
                 {failure}
               </li>
