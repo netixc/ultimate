@@ -281,7 +281,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     change: (current: ComposerAttachmentState) => ComposerAttachmentState,
   ) => {
     const current = draft.get()
-    const next = change(current)
+    const next = change({ images: current.images, attachments: current.attachments })
     // Recalled inputs can exceed one message's limit. Always let the user remove them to recover.
     const adding =
       next.images.some((image) => !current.images.includes(image)) ||
@@ -289,7 +289,11 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         (file) => !current.attachments.some((old) => old.id === file.id && old.size >= file.size),
       )
     if (adding) validateAttachments(next)
-    draft.set({ ...next, revision: current.revision + 1 })
+    draft.set({
+      images: next.images,
+      attachments: next.attachments,
+      revision: current.revision + 1,
+    })
   }
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     updateAttachments((current) => ({ ...current, images: change(current.images) }))

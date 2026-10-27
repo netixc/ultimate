@@ -401,6 +401,53 @@ it('keeps uploading and failed attachments in their draft, blocks send, and clea
   expect(controllers.get(33)!.attachments[0].id).toBe('other')
 })
 
+it('replaces a failed attempt when attachments are removed without editing the text', async () => {
+  let controller: ComposerAttachmentController
+  const submit = vi
+    .fn<(input: ComposerSubmission) => Promise<unknown>>()
+    .mockRejectedValueOnce(new Error('Send failed'))
+    .mockResolvedValue({ submissionId: 1 })
+  await registry.setLoaders({
+    '/extensions/removal/web.tsx': async () => ({
+      default: {
+        composer: ({ core }: { core: ReactNode }) =>
+          h(ComposerAttachmentAdapter, { submit, children: core }),
+        slots: {
+          'composer.attachments': () => {
+            controller = useComposerAttachments()
+            return null
+          },
+        },
+      },
+    }),
+  })
+  effects.push(store.watchConversation(49))
+  await tick()
+  const snapshot = view(49, 'conversation')
+  source(49).send('view', { ...snapshot, docs: { ...snapshot.docs, 'pi.inbox': { items: [] } } })
+  const render = () => renderToStaticMarkup(scoped(49, h(Conversation)))
+  render()
+  controller!.setAttachments(() => [
+    { id: 'removed', name: 'notes.txt', size: 12, status: 'ready' },
+  ])
+  controller!.setImages(() => [{ data: 'eA==', mimeType: 'image/png' }])
+  harness.change!({ target: { value: 'Keep only this text' } })
+  render()
+  harness.submit!()
+  await tick()
+  render()
+  controller!.setAttachments(() => [])
+  controller!.setImages(() => [])
+  render()
+  harness.submit!()
+  await tick()
+  const [first, second] = submit.mock.calls.map(([input]) => input)
+  expect(second.text).toBe(first.text)
+  expect(second.attachments).toEqual([])
+  expect(second.images).toEqual([])
+  expect(second.requestId).not.toBe(first.requestId)
+})
+
 it.each([false, true])(
   'retries the exact uncertain steer without withdrawing its accepted inbox item (merged: %s)',
   async (merged) => {
