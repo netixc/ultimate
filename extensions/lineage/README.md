@@ -67,10 +67,13 @@ document, tools and model-facing text, where agents and stored entries already u
   once, placing the note in a tally inside its own transaction, or, for a root that is no tally yet, creating a
   `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
   reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
-  waits for the lander's report (`lander:<submission>`) to be answered and the submitter and its subagents to go idle,
-  then concludes it through `ConversationsApi.concludeIn`, unless it is running or has queued input, has a reply-enabled
-  message still open, or a subagent still runs. That check, the conclusion and the task's next phase commit in one
-  transaction, so a replay never concludes twice; freeing the worktree follows as its own phase. A report that ends
+  waits for the lander's report (`lander:<submission>`) to be answered and the submitter to go idle. It then freezes
+  already admitted reply deliveries within the branch's owned tree, through the `lineage.landing-replies` point that
+  messages fills. Their durable callback addresses, child answers and exact parent report receipts must settle before
+  closing; subagents admits any missing recovery Reporter in that same check, so an idle child alone is not proof.
+  New inputs outside those receipts leave the branch open, as do unanswered callbacks, open outgoing questions,
+  queued input or still-running subagents. The final receipt/input check, `ConversationsApi.concludeIn` and the task's
+  next phase commit together, so a replay never concludes twice; freeing the worktree follows as its own phase. A report that ends
   unanswered (a provider error, a Stop, a reset) or a lander that goes idle without sending it (aborted) ends the task
   and leaves the branch open, for watchdog's idle-branches note. Any later input resumes the branch. The
   note has `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and

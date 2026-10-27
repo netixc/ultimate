@@ -4,6 +4,8 @@
  */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ReplySettlement } from '../subagents/api.ts'
 import { defineApi } from '../../shared/extension-api.ts'
 import { RootsDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
@@ -67,4 +69,13 @@ export { Branched, Rooted } from './refs.ts'
 
 /** Trees, branches and notes; core, so `need` it. */
 export const LineageApi = defineApi<LineageService>()('lineage')
+/** Message transport participating in a landed branch's one-shot conclusion; messages fills this point. */
+export type LandingRepliesService = {
+  /** Freeze already admitted reply deliveries inside this branch's owned conversation tree. */
+  admitted(tx: Tx, conversations: ConversationId[]): Promise<TaskId[]>
+  /** Read those deliveries, their callback inputs and recovered parent reports in the concluding transaction. */
+  settle(tx: Tx, deliveries: TaskId[]): Promise<ReplySettlement>
+}
+/** The bounded reply frontier for ConcludeLanded; not a general idle/busy gate. */
+export const LandingReplies = defineApi<LandingRepliesService>()('lineage.landing-replies')
 export const tier = 'core'

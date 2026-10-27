@@ -4,7 +4,14 @@
  */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
-import type { Agent, ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type {
+  Agent,
+  ConversationId,
+  EntryId,
+  SubmissionRecord,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { AgentDefinition } from '../../lib/agents.ts'
 import { defineApi } from '../../shared/extension-api.ts'
 import { StandingDoc } from './refs.ts'
@@ -80,7 +87,17 @@ export type SubagentReply = {
   failures: string[]
 }
 
+/** Settlement of a reply's input and any child answer reported back to its parent. */
+export type ReplySettlement = {
+  state: 'pending' | 'settled' | 'unanswered'
+  entries: EntryId[]
+}
+
 export type SubagentsService = {
+  /** Read a child callback's exact parent report receipt, never idle alone; does not write tables. */
+  settleReply(tx: Tx, submission: SubmissionRecord): Promise<ReplySettlement>
+  /** Admit the existing answer-recovery Reporter inside tx; call last, after all table reads. */
+  recoverReply(tx: Tx, submission: SubmissionRecord): Promise<void>
   /** Atomically start a child and its durable reporter from an already resolved definition; deduplicated by requestId. */
   start(
     tx: Tx,

@@ -8,7 +8,15 @@ import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect } from 'vitest'
 import { context } from '../server/harness.ts'
-import { branchProbe, fauxServer, post, seedTally, sourceCopy, temp } from './helpers.ts'
+import {
+  branchProbe,
+  fauxServer,
+  post,
+  prepareFauxServer,
+  seedTally,
+  sourceCopy,
+  temp,
+} from './helpers.ts'
 
 // Shared by the lineage test files: importing this registers their source fixture and server cleanup.
 let ultimateRoot: string
@@ -46,18 +54,21 @@ export function section(server: Server, id: ConversationId) {
 
 /**
  * A faux server whose provider answers lineage summaries with LINEAGE SUMMARY and everything else with the last user
- * text echoed; `requests` keeps every conversation request's messages.
+ * text echoed; `requests` keeps every conversation request's messages. Optional `setup` installs test gates and
+ * supplies a provider route before storage opens, including when reopening pending tasks.
  */
-export async function fixture(reopen?: string) {
+export async function fixture(
+  reopen?: string,
+  setup?: (prepared: Awaited<ReturnType<typeof prepareFauxServer>>) => FauxResponseFactory,
+) {
   const home = reopen ?? (await temp('ultimate-lineage-'))
-  const server = await fauxServer({ ultimateRoot, home, userHome: home })
-  servers.push(server)
+  const prepared = await prepareFauxServer({ ultimateRoot, home, userHome: home })
   const requests: Message[][] = []
   const condensed: string[] = []
   /** While `condense` is set, compaction summaries wait for it. */
   const gate: { condense?: Promise<void> } = {}
   const route: FauxResponseFactory = async (transcript) => {
-    server.host.faux!.appendResponses([route])
+    prepared.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
     if (textOf(system.content).startsWith('You condense')) {
       condensed.push(textOf(first.content))
@@ -75,7 +86,17 @@ export async function fixture(reopen?: string) {
       )
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
-  server.host.faux!.setResponses([route])
+  prepared.host.faux!.setResponses([setup?.(prepared) ?? route])
+  const opened = await prepared.go()
+  const server = {
+    ...prepared,
+    ...opened,
+    close: async () => {
+      await prepared.vite.watcher.close()
+      await prepared.close()
+    },
+  }
+  servers.push(server)
   return { server, home, requests, condensed, gate }
 }
 

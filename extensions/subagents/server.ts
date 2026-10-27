@@ -644,6 +644,35 @@ export default function subagents(
   }
   host.implement(SubagentsApi, {
     start,
+    recoverReply: (tx, submission) => recoverIn(tx, submission),
+    async settleReply(tx, submission) {
+      const entries = 'entry' in submission && submission.entry ? [submission.entry] : []
+      if (submission.status === 'unanswered') return { state: 'unanswered', entries }
+      if (submission.status !== 'done' || submission.type !== 'input')
+        return { state: 'pending', entries }
+      const child = await tx.conversation(submission.conversationId)
+      const parent = child?.owner?.conversationId
+      if (parent === undefined || !(await tx.doc(Subagents, parent)).agents[String(child!.id)])
+        return { state: 'settled', entries }
+      const report = await tx.submissionByRequest(parent, answerRequest(submission.answer))
+      if (report && 'entry' in report && report.entry) entries.push(report.entry)
+      if (
+        report?.status === 'done' ||
+        (report?.status === 'unanswered' && report.reason === 'subagent-tool-delivered')
+      )
+        return { state: 'settled', entries }
+      if (report?.status === 'unanswered') return { state: 'unanswered', entries }
+      if (report) return { state: 'pending', entries }
+      const reporters = Object.values((await tx.doc(Subagents, parent)).actions).filter(
+        (action) => action.answer === submission.answer,
+      )
+      for (const action of reporters) {
+        const reporter = await tx.task(action.reporter)
+        if (!reporter || reporter.state.status === 'terminal')
+          return { state: 'unanswered', entries }
+      }
+      return { state: 'pending', entries }
+    },
     async replies(tx, parent, children) {
       const state = await tx.doc(Subagents, parent)
       const replies: SubagentReply[] = []
@@ -754,85 +783,85 @@ export default function subagents(
   })
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
-  const recover = async (submission: SubmissionRecord) => {
+  const recoverIn = async (tx: Tx, submission: SubmissionRecord) => {
     if (
       submission.type !== 'input' ||
       submission.status !== 'done' ||
       submission.requestId?.startsWith('subagent:')
     )
       return
-    await host.harness().commit(async (tx) => {
-      const child = await tx.conversation(submission.conversationId)
-      const parent = child?.owner?.conversationId
-      if (parent === undefined) return
-      const state = await tx.doc(Subagents, parent)
-      const agent = state.agents[String(submission.conversationId)]
-      if (!agent || agent.reported.includes(submission.answer)) return
-      const childActions = Object.values(state.actions).filter(
-        (candidate) => candidate.conversationId === submission.conversationId,
+    const child = await tx.conversation(submission.conversationId)
+    const parent = child?.owner?.conversationId
+    if (parent === undefined) return
+    const state = await tx.doc(Subagents, parent)
+    const agent = state.agents[String(submission.conversationId)]
+    if (!agent || agent.reported.includes(submission.answer)) return
+    const childActions = Object.values(state.actions).filter(
+      (candidate) => candidate.conversationId === submission.conversationId,
+    )
+    // A one-way message from the parent, or its reply to the child's own question, has no
+    // reporter and no reply: without this, the answer it starts never reaches the parent,
+    // which stays idle. A pending reporter whose input was answered in the same run delivers
+    // that answer itself.
+    const input = await tx.entry(submission.entry)
+    const message = input?.data as { from?: unknown; reply?: unknown } | undefined
+    let messaged =
+      message?.from === parent &&
+      ((input?.kind === 'board.message' && message.reply === false) ||
+        input?.kind === 'board.reply')
+    for (const action of childActions) {
+      if (!messaged || action.status !== undefined) continue
+      const sibling = await tx.submissionByRequest(
+        submission.conversationId,
+        `subagent:${action.reporter}`,
       )
-      // A one-way message from the parent, or its reply to the child's own question, has no
-      // reporter and no reply: without this, the answer it starts never reaches the parent,
-      // which stays idle. A pending reporter whose input was answered in the same run delivers
-      // that answer itself.
-      const input = await tx.entry(submission.entry)
-      const message = input?.data as { from?: unknown; reply?: unknown } | undefined
-      let messaged =
-        message?.from === parent &&
-        ((input?.kind === 'board.message' && message.reply === false) ||
-          input?.kind === 'board.reply')
-      for (const action of childActions) {
-        if (!messaged || action.status !== undefined) continue
-        const sibling = await tx.submissionByRequest(
-          submission.conversationId,
-          `subagent:${action.reporter}`,
-        )
-        if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
-      }
-      // Watchdog continuations also answer failed one-way messages, which have no reporter action.
-      if (!messaged && !submission.requestId?.startsWith('watchdog-retry:')) {
-        const action = childActions.at(-1)
-        const interrupted = action?.status === 'interrupted'
-        if (
-          !action ||
-          (!['unanswered', 'failed', 'given-up'].includes(action.status ?? '') && !interrupted)
-        )
-          return
-        const failed = await tx.submissionByRequest(
-          submission.conversationId,
-          `subagent:${action.reporter}`,
-        )
-        // IDs share one allocation order; an input withdrawn before placement has no entry.
-        if (
-          failed?.status !== 'unanswered' ||
-          (failed.reason === 'aborted') !== interrupted ||
-          (failed.entry === undefined && !interrupted) ||
-          submission.entry <= (failed.entry ?? failed.id)
-        )
-          return
-      }
-      const answer = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0] as
-        | AssistantMessage
-        | undefined
-      const reporter = await tx.createTask(
-        Reporter,
-        {
-          conversationId: submission.conversationId,
-          text: reportText(submission.conversationId, agent.agent, answer),
-          steer: false,
-          answer: submission.answer,
-        },
-        { conversationId: parent, ownership: { kind: 'conversation' }, background: true },
+      if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
+    }
+    // Watchdog continuations also answer failed one-way messages, which have no reporter action.
+    if (!messaged && !submission.requestId?.startsWith('watchdog-retry:')) {
+      const action = childActions.at(-1)
+      const interrupted = action?.status === 'interrupted'
+      if (
+        !action ||
+        (!['unanswered', 'failed', 'given-up'].includes(action.status ?? '') && !interrupted)
       )
-      agent.reported.push(submission.answer)
-      state.actions[`subagent-answer:${submission.answer}`] = {
+        return
+      const failed = await tx.submissionByRequest(
+        submission.conversationId,
+        `subagent:${action.reporter}`,
+      )
+      // IDs share one allocation order; an input withdrawn before placement has no entry.
+      if (
+        failed?.status !== 'unanswered' ||
+        (failed.reason === 'aborted') !== interrupted ||
+        (failed.entry === undefined && !interrupted) ||
+        submission.entry <= (failed.entry ?? failed.id)
+      )
+        return
+    }
+    const answer = (await tx.entry(AssistantEntry, submission.answer))?.model?.[0] as
+      | AssistantMessage
+      | undefined
+    const reporter = await tx.createTask(
+      Reporter,
+      {
         conversationId: submission.conversationId,
-        reporter,
+        text: reportText(submission.conversationId, agent.agent, answer),
+        steer: false,
         answer: submission.answer,
-        status: 'done',
-      }
-    }, BACKGROUND_CONTEXT)
+      },
+      { conversationId: parent, ownership: { kind: 'conversation' }, background: true },
+    )
+    agent.reported.push(submission.answer)
+    state.actions[`subagent-answer:${submission.answer}`] = {
+      conversationId: submission.conversationId,
+      reporter,
+      answer: submission.answer,
+      status: 'done',
+    }
   }
+  const recover = (submission: SubmissionRecord) =>
+    host.harness().commit((tx) => recoverIn(tx, submission), BACKGROUND_CONTEXT)
   host.onClose(async () => {
     unsubscribe?.()
     unsubscribe = undefined

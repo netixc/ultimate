@@ -14,7 +14,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Handoff, WorkspacesApi } from '../workspaces/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
-import { LineageApi } from '../lineage/api.ts'
+import { LandingReplies, LineageApi } from '../lineage/api.ts'
 import { Messages, MessagesApi, Gate } from './api.ts'
 import { gist, openQuestion, openQuestionsNote, questionsParameter } from './questions.ts'
 import { callerOf } from './caller.ts'
@@ -28,6 +28,7 @@ import { send } from './send.ts'
 import { route, Started } from './route.ts'
 import { remoteAction, remoteReplyAction, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
+import { landingReplies } from './landing-replies.ts'
 export { gist, openQuestionsNote } from './questions.ts'
 export const docs = [Messages]
 
@@ -83,6 +84,7 @@ export default function messages(host: ExtensionHost) {
   host.need(WorkspacesApi)
   // The extension's own point, resolved where triage calls the model.
   host.want(Gate)
+  host.implement(LandingReplies, landingReplies(host))
   // The lander's deploy handoff, through workspaces' extension point, so workspaces does not depend on messages.
   host.implement(Handoff, {
     send: (from, input, requestId, ctx) =>

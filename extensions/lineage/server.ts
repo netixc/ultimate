@@ -38,7 +38,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
-import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
+import { Branch, Branched, LandingReplies, LineageApi, Rooted, Roots } from './api.ts'
 import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { Standing, Started, Subagents } from '../subagents/api.ts'
@@ -544,6 +544,7 @@ function lineage(host: ExtensionHost) {
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
   const conversations = host.need(ConversationsApi)
+  host.want(LandingReplies)
   const done = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
   /**
    * Concludes a conversation whose submission landed, once the lander's report reached it and it and its subagents are
@@ -552,7 +553,10 @@ function lineage(host: ExtensionHost) {
    */
   const ConcludeLanded = defineTask<
     { id: ConversationId; submission: string; lander: number },
-    { phase: 'wait' } | { phase: 'conclude' } | { phase: 'release' },
+    | { phase: 'wait' }
+    | { phase: 'replies'; deliveries: TaskId[]; frontier: { id: ConversationId; after: number }[] }
+    | { phase: 'conclude' }
+    | { phase: 'release' },
     null
   >({
     name: 'lineage.conclude-landed',
@@ -614,23 +618,77 @@ function lineage(host: ExtensionHost) {
         }
         // The report starts a run (the branch tells @ultimate it landed); wait for it and its foreground subagents.
         await (await runtime.conversation(id, ctx))?.waitForIdle(ctx)
-        await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'conclude' } }), ctx)
+        await runtime.commit(async (tx) => {
+          const frontier: { id: ConversationId; after: number }[] = []
+          const family = [id]
+          for (const member of family) {
+            const latest = (await tx.scanEntries({ conversationId: member }, 1)).items[0]
+            frontier.push({ id: member, after: latest?.id ?? 0 })
+            for (const child of Object.values((await tx.doc(Subagents, member)).agents))
+              family.push(child.conversationId)
+          }
+          const deliveries = (await host.want(LandingReplies)?.admitted(tx, family)) ?? []
+          return deliveries.length
+            ? { status: 'running', checkpoint: { phase: 'replies', deliveries, frontier } }
+            : { status: 'running', checkpoint: { phase: 'conclude' } }
+        }, ctx)
+      },
+      replies: async (task, runtime, ctx) => {
+        const { deliveries, frontier } = task.state.checkpoint
+        const family = new Set(frontier.map((member) => member.id))
+        for (;;) {
+          const changed = Promise.withResolvers<void>()
+          // Pi task/submission receipts, not domain events. Subscribe before the transactional check.
+          const unsubscribe = host.harness().subscribeCommits((publication) => {
+            if (
+              publication.changes.some(
+                (change) =>
+                  (change.type === 'task' &&
+                    (deliveries.includes(change.value.id) ||
+                      family.has(change.value.conversationId))) ||
+                  (change.type === 'submission' && family.has(change.value.conversationId)),
+              )
+            )
+              changed.resolve()
+          })
+          try {
+            let waiting = false
+            await runtime.commit(async (tx) => {
+              if (await waitingOnReply(tx, task.input.id)) return done
+              const replies = await host.want(LandingReplies)?.settle(tx, deliveries)
+              if (replies?.state === 'unanswered') return done
+              if (replies?.state === 'pending') {
+                waiting = true
+                return undefined
+              }
+              // Only this admitted chain may extend the boundary. A genuinely new input keeps the branch
+              // open even if its run finished while transport was draining; notes never count as inputs.
+              const allowed = new Set(replies?.entries ?? [])
+              for (const member of frontier) {
+                let cursor: Cursor | undefined
+                do {
+                  const page = await tx.scanEntries(
+                    { conversationId: member.id, minEntryId: (member.after + 1) as EntryId },
+                    200,
+                    cursor,
+                  )
+                  if (page.items.some((entry) => entry.input && !allowed.has(entry.id))) return done
+                  cursor = page.next
+                } while (cursor)
+              }
+              return concludeLanded(tx, task.input.id)
+            }, ctx)
+            if (!waiting) return
+            await awaitWithContext(changed.promise, ctx)
+          } finally {
+            unsubscribe()
+          }
+        }
       },
       // The check, the conclusion and this task's next state commit together: an input that arrives first keeps the
       // branch open, one that arrives after resumes it, and a replay never concludes it a second time.
       conclude: (task, runtime, ctx) =>
-        runtime.commit(async (tx) => {
-          const { id } = task.input
-          if (await keepsWorking(tx, id)) return done
-          try {
-            await conversations.concludeIn(tx, [id])
-          } catch (error) {
-            // Roots and standing agents refuse concluding before any write; they stay open by design.
-            host.notice(`Not concluding #${id} after landing: ${String(error)}`)
-            return done
-          }
-          return { status: 'running', checkpoint: { phase: 'release' } }
-        }, ctx),
+        runtime.commit((tx) => concludeLanded(tx, task.input.id), ctx),
       // At least once, like the Conclude action's release: it frees only what a concluded, idle branch holds.
       release: async (task, runtime, ctx) => {
         await host.want(Release)?.release([task.input.id], ctx)
@@ -640,9 +698,26 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
+  async function concludeLanded(tx: Tx, id: ConversationId) {
+    if (await keepsWorking(tx, id)) return done
+    try {
+      await conversations.concludeIn(tx, [id])
+    } catch (error) {
+      // Roots and standing agents refuse concluding before any write; they stay open by design.
+      host.notice(`Not concluding #${id} after landing: ${String(error)}`)
+      return done
+    }
+    return { status: 'running', checkpoint: { phase: 'release' } } as const
+  }
   /** Inside `tx`: whether `id` is busy or has input queued, waits on a reply it asked for, or has a subagent running. */
   async function keepsWorking(tx: Tx, id: ConversationId) {
     if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
+    if (await waitingOnReply(tx, id)) return true
+    for (const child of Object.values((await tx.doc(Subagents, id)).agents))
+      if ((await tx.doc(LiveDoc, child.conversationId)).run) return true
+    return false
+  }
+  async function waitingOnReply(tx: Tx, id: ConversationId) {
     // Read by kind: messages depends on lineage, so lineage cannot import messages.
     const log = host.doc('board')
     const messages = (
@@ -654,8 +729,6 @@ function lineage(host: ExtensionHost) {
       )
     )
       return true
-    for (const child of Object.values((await tx.doc(Subagents, id)).agents))
-      if ((await tx.doc(LiveDoc, child.conversationId)).run) return true
     return false
   }
   /**

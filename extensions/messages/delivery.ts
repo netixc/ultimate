@@ -26,6 +26,9 @@ import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
 import { remoteLabel } from './addresses.ts'
 
+/** The durable callback address survives task completion, unlike its reply-phase checkpoint. */
+export type DeliveryReceipt = { conversationId: ConversationId; requestId: string }
+
 export function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
@@ -49,7 +52,7 @@ export function delivery(host: ExtensionHost) {
     | { phase: 'deliver' }
     /** `stopped`: the recipient's run was stopped before it answered; `failed` is set too, as for any non-answer. */
     | { phase: 'reply'; message: Message; failed: boolean; stopped?: boolean },
-    null
+    DeliveryReceipt | null
   >({
     name: 'board.delivery',
     version: 1,
@@ -414,7 +417,13 @@ export function delivery(host: ExtensionHost) {
           if (stored && !failed) stored.state = 'delivered'
           return {
             status: 'terminal',
-            outcome: { status: 'completed', result: null },
+            outcome: {
+              status: 'completed',
+              result:
+                typeof m.to === 'number'
+                  ? { conversationId: m.to as ConversationId, requestId: `board-reply:${m.id}` }
+                  : null,
+            },
           }
         }, ctx)
       },
