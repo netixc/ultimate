@@ -4,7 +4,8 @@
  */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { Agent, ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { AgentDefinition } from '../../lib/agents.ts'
 import { defineApi } from '../../shared/extension-api.ts'
 import { StandingDoc } from './refs.ts'
 import type { createChild } from './children.ts'
@@ -68,7 +69,35 @@ export const Profile = defineDoc<{ definition?: string }>({
   initial: () => ({}),
 })
 
+/** A child's latest actual answer and delivery state; prior failures remain visible after recovery. */
+export type SubagentReply = {
+  conversationId: ConversationId
+  status: 'pending' | 'received' | 'failed' | 'missing'
+  answerId?: EntryId
+  provider?: string
+  model?: string
+  text?: string
+  failures: string[]
+}
+
 export type SubagentsService = {
+  /** Atomically start a child and its durable reporter from an already resolved definition; deduplicated by requestId. */
+  start(
+    tx: Tx,
+    options: {
+      parent: ConversationId
+      parentAgent: Agent
+      definition: AgentDefinition
+      text: string
+      requestId: string
+      background: boolean
+      sourceEntry?: EntryId
+      forkAt?: EntryId
+      isolate?: boolean
+    },
+  ): Promise<{ conversationId: ConversationId; reporter: TaskId }>
+  /** Read answers and reporter tasks within tx. Idle alone is never an answer; no verdict parsing is performed. */
+  replies(tx: Tx, parent: ConversationId, children: ConversationId[]): Promise<SubagentReply[]>
   /** The standing agents that run in this home, by name and description; use it to list valid `@name` addresses. */
   residents(ctx: Context): Promise<{ name: string; description: string }[]>
   /** The conversation of standing agent `name`, created or refreshed from its definition; throws for unknown names. */

@@ -30,6 +30,7 @@ import type {
   TaskId,
   ToolExecutionApi,
   SubmissionRecord,
+  Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
@@ -51,6 +52,7 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Pin } from '../models/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
+import type { SubagentReply, SubagentsService } from './api.ts'
 import {
   DefinitionAction,
   DefinitionsAction,
@@ -583,7 +585,122 @@ export default function subagents(
       return definitions.find((definition) => definition.name === name)?.model
     },
   })
+  const Reporter = createReporter()
+  const start = async (tx: Tx, options: Parameters<SubagentsService['start']>[1], steer = true) => {
+    const { parent, parentAgent, definition, text, requestId, background, sourceEntry, forkAt } =
+      options
+    const state = await tx.doc(Subagents, parent)
+    if (state.actions[requestId]) {
+      const { conversationId, reporter } = state.actions[requestId]
+      return { conversationId, reporter }
+    }
+    const available = [...parentAgent.tools, ...parentAgent.deferred]
+    if (definition.tools?.some((name) => !available.some((tool) => tool.name === name)))
+      throw new Error('Definition tools must be a subset of parent tools')
+    const owner = await tx.createTask(Anchor, null, {
+      conversationId: parent,
+      ownership: { kind: 'conversation' },
+      background: true,
+    })
+    const child = await createChild(host, tx, {
+      owner: { kind: 'task', taskId: owner },
+      definition,
+      parentAgent,
+      modelRuntime: host.modelRuntime,
+      metadata: host.metadata,
+      label: definition.name,
+      title: shortTitle(text),
+      excludeTools: definition.tools?.includes('subagent') ? [] : ['subagent'],
+      excludeExtensions: definition.tools?.includes('subagent') ? [] : ['subagents'],
+      ...(forkAt === undefined ? {} : { fork: { conversationId: parent, at: forkAt } }),
+      cwd: parentAgent.cwd ?? host.projectRoot,
+    })
+    await started(host, tx, child, definition.name, 'child')
+    state.agents[String(child.id)] = {
+      conversationId: child.id,
+      agent: definition.name,
+      background,
+      reported: [],
+    }
+    if (options.isolate ?? definition.isolate === 'worktree') {
+      const workspace = await workspaces.create(tx, child.id, parentAgent.cwd ?? host.projectRoot)
+      await configure(tx, child.id, {
+        instructions: `${definition.instructions}\nWork only in ${workspace.path} on ${workspace.branch}, cut from ${workspace.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
+      })
+    }
+    const reporter = await tx.createTask(
+      Reporter,
+      {
+        conversationId: child.id,
+        text,
+        steer,
+        ...(sourceEntry ? { sourceEntry } : {}),
+      },
+      { conversationId: parent, ownership: { kind: 'conversation' }, background: true },
+    )
+    const action = { conversationId: child.id, reporter }
+    state.actions[requestId] = action
+    return action
+  }
   host.implement(SubagentsApi, {
+    start,
+    async replies(tx, parent, children) {
+      const state = await tx.doc(Subagents, parent)
+      const replies: SubagentReply[] = []
+      for (const conversationId of children) {
+        const childActions = Object.values(state.actions).filter(
+          (action) => action.conversationId === conversationId,
+        )
+        const answers = new Set(state.agents[String(conversationId)]?.reported ?? [])
+        const failures = new Set<string>()
+        let pending = false
+        for (const action of childActions) {
+          if (action.answer !== undefined) answers.add(action.answer)
+          if (
+            action.status !== undefined &&
+            !['done', 'unanswered', 'interrupted'].includes(action.status)
+          )
+            failures.add(action.status)
+          const reporter = await tx.task(action.reporter)
+          if (
+            reporter &&
+            reporter.state.status !== 'terminal' &&
+            reporter.state.status !== 'completing' &&
+            (reporter.state.checkpoint as { phase?: string } | null)?.phase === 'deliver'
+          )
+            pending = true
+          if (
+            (reporter?.state.status === 'terminal' || reporter?.state.status === 'completing') &&
+            ['failed', 'faulted', 'orphaned'].includes(reporter.state.outcome.status)
+          )
+            failures.add(reporter.state.outcome.status)
+        }
+        let latest: { id: EntryId; message: AssistantMessage } | undefined
+        for (const id of answers) {
+          const entry = await tx.entry(AssistantEntry, id)
+          const message = entry?.model?.[0] as AssistantMessage | undefined
+          if (!answered(message)) {
+            failures.add('invalid-answer')
+            continue
+          }
+          if (latest === undefined || id > latest.id) latest = { id, message: message! }
+        }
+        replies.push({
+          conversationId,
+          status: latest ? 'received' : failures.size ? 'failed' : pending ? 'pending' : 'missing',
+          ...(latest
+            ? {
+                answerId: latest.id,
+                provider: latest.message.provider,
+                model: latest.message.model,
+                text: textOf(latest.message),
+              }
+            : {}),
+          failures: [...failures],
+        })
+      }
+      return replies
+    },
     async createChild(tx, options) {
       const child = await createChild(host, tx, options)
       await started(host, tx, child, options.definition?.name ?? options.label, 'child')
@@ -635,7 +752,6 @@ export default function subagents(
       }, ctx)
     },
   })
-  const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
   const recover = async (submission: SubmissionRecord) => {
@@ -953,7 +1069,6 @@ export default function subagents(
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
-              let conversationId = args.id as ConversationId
               if (definition) {
                 await conversations.requestSummary(
                   tx,
@@ -961,44 +1076,23 @@ export default function subagents(
                   { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
                   model,
                 )
-                const owner = await tx.createTask(Anchor, null, {
-                  ownership: { kind: 'conversation' },
-                  background: true,
-                })
-                const child = await createChild(host, tx, {
-                  owner: { kind: 'task', taskId: owner },
-                  definition,
-                  parentAgent: parent,
-                  modelRuntime: host.modelRuntime,
-                  metadata: host.metadata,
-                  label: definition.name,
-                  title: shortTitle(text),
-                  excludeTools: definition.tools?.includes('subagent') ? [] : ['subagent'],
-                  excludeExtensions: definition.tools?.includes('subagent') ? [] : ['subagents'],
-                  ...(forkAt === undefined
-                    ? {}
-                    : { fork: { conversationId: api.conversationId, at: forkAt } }),
-                  cwd: parent.cwd ?? host.projectRoot,
-                })
-                conversationId = child.id
-                await started(host, tx, child, definition.name, 'child')
-                state.agents[String(child.id)] = {
-                  conversationId,
-                  agent: definition.name,
-                  background: args.background === true,
-                  reported: [],
-                }
-                if (isolated) {
-                  const workspace = await workspaces.create(
-                    tx,
-                    child.id,
-                    parent.cwd ?? host.projectRoot,
-                  )
-                  await configure(tx, child.id, {
-                    instructions: `${definition.instructions}\nWork only in ${workspace.path} on ${workspace.branch}, cut from ${workspace.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
-                  })
-                }
+                return start(
+                  tx,
+                  {
+                    parent: api.conversationId,
+                    parentAgent: parent,
+                    definition,
+                    text,
+                    requestId: api.callId,
+                    background: args.background === true,
+                    ...(assistant ? { sourceEntry: assistant } : {}),
+                    ...(forkAt === undefined ? {} : { forkAt }),
+                    isolate: isolated === true,
+                  },
+                  args.steer !== false,
+                )
               }
+              const conversationId = args.id as ConversationId
               const reporter = await tx.createTask(
                 Reporter,
                 {

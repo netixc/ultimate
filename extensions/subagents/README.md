@@ -18,6 +18,26 @@ Definitions are Markdown with YAML frontmatter, parsed by Pi's `parseFrontmatter
 
 The built-in `coordinator` definition supplies instructions for Messages `branch` calls: these are feature branches, not subagents, and keep their normal tools and model.
 
+## Transactional starts and reply reads
+
+`SubagentsApi.start(tx, {parent, parentAgent, definition, text, requestId, background, sourceEntry?, forkAt?, isolate?})`
+starts a child and its existing durable Reporter in the caller's transaction. The caller supplies the already resolved
+definition; this method does not rediscover it. The parent-scoped `Subagents.actions[requestId]` receipt deduplicates the
+whole start. Anchor ownership, child configuration, the started event, optional worktree and reporter are committed
+together, so callers can freeze their own run and start several children atomically without another orchestrator.
+`isolate` is a boolean override, defaulting to the definition's `worktree` setting. Explicit tools must be available
+among the parent's active or deferred tools; the normal child delegation restrictions still apply. Tool-triggered
+spawn summaries remain the tool's responsibility, in the same transaction.
+
+`SubagentsApi.replies(tx, parent, children)` reads the existing action receipts, reported answer IDs, actual assistant
+entries and reporter tasks through that transaction. Each result has `conversationId`, `status`, `failures`, and, when
+received, `answerId`, `provider`, `model` and `text` from the latest valid stored answer. A valid answer takes precedence
+even while its report is still being delivered. Aborted, errored or text-empty messages never count as received.
+Without an answer, a provider/delivery failure or invalid answer is `failed`, a reporter still delivering its child
+input is `pending`, and stopped or terminal work without a reply is `missing`; idle alone proves nothing. Recovered
+answers use the existing recovery receipts. Earlier failure status strings (or `invalid-answer`) remain in `failures`
+after a later successful response. This is delivery state, not approval or judgment parsing.
+
 ## Standing agents and owned tools
 
 Set `resident: true` (a boolean) to make a definition available as a standing agent. The config view's Standing agent switch saves this field. Its standing conversation is ownerless, uses the project directory regardless of `isolate`, and is pinned with the lander as `@name`.
