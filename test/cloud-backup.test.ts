@@ -2,7 +2,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // Cloud backups and `pnpm restore` against an in-memory Worker (`cloud-stub.ts`): the parent rule, force, and the
 // restore that installs a backup as a home's state.
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
@@ -14,6 +14,7 @@ import { chapterFiles, FIRST_CHAPTER, readChapters, requestChapter } from '../li
 import { context, prepareHarness } from '../server/harness.ts'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { acquireLock } from '../server/lock.ts'
+import { projectHome } from '../server/project.ts'
 import { findProject, main, restore } from '../scripts/restore.ts'
 import { cloudStub } from './cloud-stub.ts'
 import { eventHost, fauxServer, post, temp } from './helpers.ts'
@@ -388,7 +389,7 @@ async function checkout(project: string) {
   return at
 }
 /** Run `pnpm restore args` as user `user` against the stub, returning what it printed. */
-async function cli(user: string, home: string, ...args: string[]) {
+async function cli(user: string, home: string | undefined, ...args: string[]) {
   const printed: string[] = []
   const log = vi.spyOn(console, 'log').mockImplementation((line: string) => printed.push(line))
   vi.stubEnv('HOME', user)
@@ -404,6 +405,21 @@ async function cli(user: string, home: string, ...args: string[]) {
     vi.unstubAllEnvs()
   }
 }
+
+it('restores a backup recorded through a checkout alias into the default project home', async () => {
+  const other = own()
+  const source = await checkout(other)
+  const alias = join(await temp('ultimate-backup-alias-'), 'app')
+  await symlink(source.projectRoot, alias)
+  const done = await back({ ...source, projectRoot: alias }, 'desk', { key: other })
+  const user = await temp()
+  const home = projectHome(await realpath(source.projectRoot), user)
+  const printed = await cli(user, undefined, '--dir', alias, '--yes')
+  expect(printed).toContain(`home     ${home}`)
+  expect(printed).toContain(`Installed backup ${done.id}`)
+  expect(notes(home)).toEqual([])
+  expect(await readBackup(home, other)).toMatchObject({ key: other, parent: done.id })
+})
 
 it('restores chapters by name, explicit key and snapshot, defaulting to the active chapter', async () => {
   const worker = cloudStub()

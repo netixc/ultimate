@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { readdir, rm, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readdir, realpath, rm, stat } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
 // Cleanup must use the same owner validation and PID semantics as the storage lock.
 // oxlint-disable-next-line no-restricted-imports
 import { alive, readOwner } from '../../server/lock.ts'
@@ -9,6 +9,7 @@ import { git } from '../../lib/git.ts'
 
 /** Hold both lock transactions throughout cleanup; PID sidecars also protect startup and shutdown gaps. */
 export async function cleanPreview(home: string) {
+  home = await realpath(home)
   const locks: DatabaseSync[] = []
   try {
     for (const name of ['ultimate.lock', 'storage.lock']) {
@@ -59,7 +60,7 @@ export async function cleanPreview(home: string) {
         const fields = record.split('\0')
         const path = fields.find((field) => field.startsWith('worktree '))?.slice(9)
         if (!path) continue
-        const inside = relative(resolve(home), path)
+        const inside = relative(home, path)
         if (!inside || inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
           continue
         const branch = fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18)

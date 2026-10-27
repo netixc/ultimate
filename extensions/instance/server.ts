@@ -11,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve as resolvePath } from 'node:path'
+import { basename, dirname, join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@earendil-works/chord'
@@ -306,8 +306,8 @@ export default function instanceExtension(
         home = await realpath(resolvePath(args.home))
       } else {
         // Publish only after the parent's lease exists, so another host's sweep cannot race startup.
-        const staging = await mkdtemp(join(tmpdir(), '.ultimate-instance-'))
-        home = join(tmpdir(), basename(staging).slice(1))
+        const staging = await realpath(await mkdtemp(join(tmpdir(), '.ultimate-instance-')))
+        home = join(dirname(staging), basename(staging).slice(1))
         try {
           await writeFile(join(staging, 'ultimate.lock'), JSON.stringify({ pid: process.pid }))
           await writeFile(join(staging, 'project.json'), JSON.stringify({ root: project }))

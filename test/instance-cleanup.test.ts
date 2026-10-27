@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -23,13 +23,13 @@ async function fixture() {
   await writeFile(join(source, 'base'), 'base')
   await git(source, 'add', '.')
   await git(source, 'commit', '-m', 'Initial')
-  const home = join(root, 'ultimate-instance-dead')
-  await mkdir(home)
+  await mkdir(join(root, 'ultimate-instance-dead'))
+  const home = await realpath(join(root, 'ultimate-instance-dead'))
   await writeFile(join(home, 'project.json'), JSON.stringify({ root: source }))
   const branch = `ultimate/${createHash('sha256').update(home).digest('hex').slice(0, 6)}-1`
   return { root, source, home, branch }
 }
-it('sweeps dead homes, their nested worktrees and branches but preserves neighbours', async () => {
+it('sweeps through a parent alias, removing dead homes, worktrees and branches but preserving neighbours', async () => {
   const { root, source, home, branch } = await fixture()
   const worker = join(home, 'worktrees', '1')
   const lander = join(home, 'lander', 'hash')
@@ -45,8 +45,10 @@ it('sweeps dead homes, their nested worktrees and branches but preserves neighbo
   await git(source, 'worktree', 'add', '-b', 'neighbour', neighbour)
   // Not a home: never follow a symlink, even one with the preview prefix.
   await symlink(project, join(root, 'ultimate-instance-link'))
+  const alias = join(root, 'alias')
+  await symlink(root, alias)
   const notices: string[] = []
-  await sweepPreviews(root, (message) => notices.push(message))
+  await sweepPreviews(alias, (message) => notices.push(message))
   expect(notices).toEqual([])
   expect(await stat(home).catch(() => undefined)).toBeUndefined()
   expect(await git(source, 'worktree', 'list', '--porcelain')).not.toContain(home + '/')

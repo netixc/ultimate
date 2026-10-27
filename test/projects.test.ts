@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, realpath, symlink, writeFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { fauxServer, post, temp, until } from './helpers.ts'
@@ -88,6 +88,27 @@ it('keeps stores local while exposing projects, conversations and live URLs thro
     ]),
   )
   expect(b.api.conversations().some((item) => item.title === 'A titled conversation')).toBe(false)
+})
+
+it('uses the same home identity through a directory alias', async () => {
+  const userHome = await temp('ultimate-project-home-alias-')
+  const projectRoot = join(userHome, 'app')
+  await mkdir(projectRoot)
+  const home = projectHome(await realpath(projectRoot), userHome)
+  await mkdir(home, { recursive: true })
+  const alias = join(userHome, 'home-alias')
+  await symlink(home, alias)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: alias,
+  })
+  servers.push(server)
+  expect(server.host.home).toBe(await realpath(home))
+  const listed = await projects(userHome, server.host.home)
+  expect(listed).toHaveLength(1)
+  expect(listed[0]).toMatchObject({ home: server.host.home, current: true })
 })
 
 it('lists unknown homes and ignores dead locks; skips unchanged index writes and excludes children', async () => {

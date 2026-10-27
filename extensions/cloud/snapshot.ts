@@ -2,7 +2,7 @@
 // `ultimate/*` branches. Everything is compressed and sealed on the machine; the Worker stores only ciphertext.
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
+import { mkdtemp, realpath, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Readable } from 'node:stream'
@@ -122,10 +122,17 @@ export async function downloadSnapshot(o: {
   ) as SnapshotManifest
   if (manifest.id !== o.id || manifest.key !== o.key)
     throw new Error(`Snapshot ${o.id} belongs to another project`)
-  if (o.root && manifest.root && manifest.root !== o.root)
-    throw new Error(
-      `${basename(manifest.root)} was backed up from ${manifest.root}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
-    )
+  if (o.root && manifest.root && manifest.root !== o.root) {
+    const backedUpRoot = await realpath(manifest.root).catch((error: NodeJS.ErrnoException) => {
+      // A checkout at a missing recorded path cannot be this checkout; retain the path-mismatch refusal below.
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (backedUpRoot !== (await realpath(o.root)))
+      throw new Error(
+        `${basename(manifest.root)} was backed up from ${manifest.root}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
+      )
+  }
   const total = manifest.database.bytes + (manifest.bundle?.bytes ?? 0)
   const database = join(o.dir, `snapshot-${o.id}.sqlite`)
   const bundle = join(o.dir, `snapshot-${o.id}.bundle`)

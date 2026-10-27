@@ -126,8 +126,10 @@ export async function prepareHarness(options: HostOptions) {
   const projectRoot = await realpath(options.projectRoot ?? ultimateRoot)
   const userHome = options.userHome ?? homedir()
   const builds = createBuild(ultimateRoot)
-  const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
-  await mkdir(home, { recursive: true })
+  const requestedHome =
+    options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
+  await mkdir(requestedHome, { recursive: true })
+  const home = await realpath(requestedHome)
   /** The active chapter's files, read again each time storage opens, after a journaled switch finished. */
   let chapter = await activeChapter(home)
   const runtime = await ModelRuntime.create()
