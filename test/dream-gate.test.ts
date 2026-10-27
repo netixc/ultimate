@@ -73,6 +73,36 @@ it('counts event and standing-context receipts, and numeric-context recreation t
   expect((await gate(f.seed, 'fresh-roots', f.api)).ok).toBe(true)
 })
 
+it('counts chapter-bound event recreation tasks and preserves both fixed-root receipts', async () => {
+  const f = instance()
+  f.seed.automations = (['conversations.compacted', 'workspaces.landed'] as const).flatMap((name) =>
+    [1, 42].map((target) => ({
+      name: `${name} ${target}`,
+      prompt: 'Review',
+      event: {
+        name,
+        where: {
+          [name === 'conversations.compacted' ? 'conversation' : 'conversationId']: target,
+        },
+      },
+    })),
+  )
+  f.seed.counts.automations = 4
+  inspection(
+    () => f.seed,
+    () => ({
+      todos: { items: [{}, {}, {}, {}, {}] },
+      'dream.seed': { automations: ['conversations.compacted 1', 'workspaces.landed 1'] },
+    }),
+  )
+  const result = await gate(f.seed, 'fresh-roots', f.api)
+  expect(result.ok).toBe(true)
+  expect(result.checks.filter(({ name }) => ['todos', 'automations'].includes(name))).toEqual([
+    { name: 'todos', ok: true, detail: '5 present; expected 5' },
+    { name: 'automations', ok: true, detail: '2 present; expected 2' },
+  ])
+})
+
 it.each([
   ['memories', { 'lineage.memory': { memories: {} } }],
   ['todos', { todos: { items: [{}, {}] } }],

@@ -10,6 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
+import { AutomationsApi } from '../automations/api.ts'
 import { BuiltInDoc, compactionSummary, PauseDoc } from './before-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
@@ -204,6 +205,25 @@ function chapterText(host: ExtensionHost, seed: Seed) {
   ].join('\n')
 }
 
+/** Why a carried trigger needs recreating instead of reusing a previous chapter's conversation ids. */
+export function recreationReason(automation: Seed['automations'][number]) {
+  const { event, condition, prompt } = automation
+  const field =
+    event?.name === 'conversations.compacted'
+      ? 'conversation'
+      : event?.name === 'workspaces.landed'
+        ? 'conversationId'
+        : undefined
+  const target = field && event?.where?.[field]
+  if (
+    condition?.of.startsWith('#') ||
+    (typeof target === 'number' && target !== ROOT_CONVERSATION_ID)
+  )
+    return 'conversation target'
+  if (!prompt) return 'subscribers'
+  return undefined
+}
+
 /**
  * Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. Returns the
  * chapter's seed, if it has one.
@@ -239,10 +259,10 @@ export async function applySeed(host: ExtensionHost) {
             text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
           })),
         ...seed.automations
-          .filter((item) => !item.prompt || item.condition?.of.startsWith('#'))
-          .map(({ name, schedule, event, condition }) => ({
+          .filter((item) => recreationReason(item))
+          .map((item) => ({
             owner: 'ultimate' as const,
-            text: `Recreate ${schedule ? 'schedule' : event ? 'event' : 'context'} automation (${name}) with new ${condition?.of.startsWith('#') ? 'conversation target' : 'subscribers'}: ${JSON.stringify(schedule ?? event ?? condition)}`,
+            text: `Recreate ${item.schedule ? 'schedule' : item.event ? 'event' : 'context'} automation (${item.name}) with new ${recreationReason(item)}: ${JSON.stringify(item.schedule ?? item.event ?? item.condition)}`,
           })),
       ]
       for (const item of carried) todos.items.push({ ...item, id: todos.next++, at: Date.now() })
@@ -268,13 +288,12 @@ export async function applySeed(host: ExtensionHost) {
   }
   const signal = new AbortController().signal
   for (const automation of seed.automations) {
-    if (!automation.prompt || automation.condition?.of.startsWith('#')) continue
+    if (recreationReason(automation)) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     if (seed.gate) {
-      // The gate's preview runs against the real project: it checks each schedule but creates nothing that could fire.
-      if (automation.schedule)
-        await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
+      // The gate checks the same inputs as create, without preparing a target or creating anything that could fire.
+      await host.need(AutomationsApi).validateCreate(automation)
     } else {
       // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
       // A rediscovered project script may share the name: only a carried trigger counts as the lost create.

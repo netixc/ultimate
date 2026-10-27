@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { mkdir, writeFile, rm } from 'node:fs/promises'
 import type { JsonValue } from '@earendil-works/chord'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -15,6 +16,8 @@ import { docs as lineageDocs } from '../extensions/lineage/server.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Todos } from '../extensions/todos/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import { AutomationsApi } from '../extensions/automations/api.ts'
+import type { AutomationsService } from '../extensions/automations/api.ts'
 import automations, {
   actions as automationActions,
   Automations,
@@ -34,6 +37,11 @@ afterEach(async () => {
 
 async function fixture() {
   const home = await temp('ultimate-dream-seed-')
+  await mkdir(join(home, 'agents'))
+  await writeFile(
+    join(home, 'agents/ultimate.md'),
+    '---\nname: ultimate\ndescription: Coordinates\nresident: true\n---\nCoordinate the project.\n',
+  )
   const prepared = await prepareHarness({
     ultimateRoot: home,
     userHome: home,
@@ -47,6 +55,10 @@ async function fixture() {
   let cloud: CloudService | undefined
   const tokens = [...lineageDocs, Messages, Todos, Sessions]
   const resources = new Map<string, unknown>()
+  let automationService: AutomationsService
+  const validateCreate = vi.fn<AutomationsService['validateCreate']>((args) =>
+    automationService.validateCreate(args),
+  )
   const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
     if (extension !== 'automations' || !['list', 'create', 'describe'].includes(action))
       throw new Error(`Unexpected action ${extension}/${action}`)
@@ -72,7 +84,9 @@ async function fixture() {
     },
     metadata: Metadata,
     ...eventHost(() => opened.harness, 'automations'),
-    implement: () => {},
+    implement: (api: { name: string }, service: AutomationsService) => {
+      if (api.name === AutomationsApi.name) automationService = service
+    },
     onRelease: () => {},
     onClose: () => {},
     projectSetup: async () => ({ decision: false }),
@@ -86,18 +100,21 @@ async function fixture() {
     react: () => {},
     notice: () => {},
     want: (api: { name: string }) => (api.name === CloudApi.name ? cloud : undefined),
-    need: () => ({
-      standing: async () =>
-        opened.harness.commit(async (tx) => {
-          const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-          if (!standing.ultimate) {
-            const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-            await configure(tx, created.id, {})
-            standing.ultimate = created.id
-          }
-          return standing.ultimate
-        }, context),
-    }),
+    need: (api: { name: string }) =>
+      api.name === AutomationsApi.name
+        ? { validateCreate }
+        : {
+            standing: async () =>
+              opened.harness.commit(async (tx) => {
+                const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+                if (!standing.ultimate) {
+                  const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+                  await configure(tx, created.id, {})
+                  standing.ultimate = created.id
+                }
+                return standing.ultimate
+              }, context),
+          },
     invoke,
   } as unknown as ExtensionHost
   prepared.registry.install(automations(host))
@@ -116,6 +133,7 @@ async function fixture() {
     home,
     host,
     invoke,
+    validateCreate,
     open,
     close,
     /** What a facet reload does: onOpen again on the open harness. */
@@ -456,7 +474,58 @@ it('carries event and standing context triggers, but leaves numeric context targ
   )
 })
 
-it('checks gate automation schedules without creating any and records receipts exactly once', async () => {
+it.each([false, true])(
+  'recreates chapter-bound event targets but carries fixed root filters: gate = %s',
+  async (gate) => {
+    const f = await fixture()
+    await f.source()
+    for (const [name, field] of [
+      ['conversations.compacted', 'conversation'],
+      ['workspaces.landed', 'conversationId'],
+    ] as const) {
+      for (const target of [ROOT_CONVERSATION_ID, 42])
+        await f.host.invoke(
+          'automations',
+          'create',
+          {
+            name: `${name} ${target}`,
+            prompt: 'Review',
+            event: { name, where: { [field]: target } },
+          },
+          new AbortController().signal,
+        )
+    }
+    const seed = await buildSeed(f.host, 1)
+    if (gate) seed.gate = true
+    expect(seed.counts.automations).toBe(4)
+    await writeSeed(join(f.home, 'chapters', 'event-targets'), seed)
+    await f.close()
+    await requestChapter(f.home, 'event-targets')
+    await f.open()
+    await applySeed(f.host)
+    const todos = (await f.harness.snapshot(Todos, ROOT_CONVERSATION_ID, context))!.items
+    expect(
+      todos.filter(({ text }) => text.startsWith('Recreate event')).map(({ text }) => text),
+    ).toEqual([
+      'Recreate event automation (conversations.compacted 42) with new conversation target: {"name":"conversations.compacted","where":{"conversation":42}}',
+      'Recreate event automation (workspaces.landed 42) with new conversation target: {"name":"workspaces.landed","where":{"conversationId":42}}',
+    ])
+    expect(
+      (await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations,
+    ).toEqual(['conversations.compacted 1', 'workspaces.landed 1'])
+    const carried = await automationActions.list(null, { host: f.host } as ActionContext)
+    expect(carried.map(({ event }) => event && { name: event.name, where: event.where })).toEqual(
+      gate
+        ? []
+        : [
+            { name: 'conversations.compacted', where: { conversation: 1 } },
+            { name: 'workspaces.landed', where: { conversationId: 1 } },
+          ],
+    )
+  },
+)
+
+it('validates all gate automation triggers without creating any and records receipts exactly once', async () => {
   const f = await fixture()
   await f.source()
   const seed = await buildSeed(f.host, 1)
@@ -468,12 +537,17 @@ it('checks gate automation schedules without creating any and records receipts e
       schedule: { kind: 'every', ms: 86400000 },
     },
     {
-      name: 'Weekly',
+      name: 'Landed',
       prompt: 'Read',
-      schedule: { kind: 'cron', expr: '0 9 * * 1', tz: 'Europe/Vienna' },
+      event: { name: 'workspaces.landed' },
+    },
+    {
+      name: 'Context',
+      prompt: 'Review',
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
     },
   ]
-  seed.counts.automations = 2
+  seed.counts.automations = 3
   await writeSeed(join(f.home, 'chapters', 'preview'), seed)
   await f.close()
   await requestChapter(f.home, 'preview')
@@ -482,22 +556,51 @@ it('checks gate automation schedules without creating any and records receipts e
   await applySeed(f.host)
 
   expect(await automationActions.list(null, { host: f.host } as ActionContext)).toEqual([])
-  expect(
-    f.invoke.mock.calls.map(([extension, action, args]) => ({
-      extension,
-      action,
-      args,
-    })),
-  ).toEqual(
-    seed.automations.map(({ schedule }) => ({
-      extension: 'automations',
-      action: 'describe',
-      args: { schedule },
-    })),
-  )
+  expect(f.invoke).not.toHaveBeenCalled()
+  expect(f.validateCreate.mock.calls).toEqual(seed.automations.map((automation) => [automation]))
   expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations).toEqual(
-    ['Daily', 'Weekly'],
+    ['Daily', 'Landed', 'Context'],
   )
+})
+
+it('rejects a removed run profile in the gate without a receipt or automation mutations', async () => {
+  const f = await fixture()
+  await f.source()
+  const profile = join(f.home, 'agents/review.md')
+  await writeFile(profile, '---\nname: review\ndescription: Reviews\n---\nReview the project.\n')
+  await f.host.invoke(
+    'automations',
+    'create',
+    {
+      name: 'Removed profile',
+      prompt: 'Review',
+      schedule: 'every 1d',
+      agent: 'review',
+    },
+    new AbortController().signal,
+  )
+  const seed = { ...(await buildSeed(f.host, 1)), gate: true as const }
+  await rm(profile)
+  await writeSeed(join(f.home, 'chapters', 'removed-profile'), { ...seed, automations: [] })
+  await f.close()
+  await requestChapter(f.home, 'removed-profile')
+  await f.open()
+  const state = () =>
+    f.harness.commit(
+      async (tx) => ({
+        automations: JSON.parse(JSON.stringify(await tx.doc(Automations))),
+        conversations: (await tx.scanConversations({}, 100)).items.map(({ id }) => id),
+        tasks: (await tx.scanTasks({}, 100)).items.map(({ id }) => id),
+        receipt: JSON.parse(JSON.stringify(await tx.doc(SeedState, ROOT_CONVERSATION_ID))),
+      }),
+      context,
+    )
+  const before = await state()
+  await writeSeed(f.host.chapter.dir, seed)
+  await expect(applySeed(f.host)).rejects.toThrow('Unknown agent: review')
+  expect(await state()).toEqual(before)
+  expect(before.automations.automations).toEqual({})
+  expect(before.receipt.automations).toEqual([])
 })
 
 it.each([true, false])(

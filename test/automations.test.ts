@@ -15,6 +15,8 @@ import { Metadata } from '../server/metadata.ts'
 import { Profile } from '../extensions/subagents/api.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
+import type { AutomationsService } from '../extensions/automations/api.ts'
+import type { CreateArgs } from '../extensions/automations/types.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { createChild } from '../extensions/subagents/children.ts'
@@ -37,6 +39,10 @@ async function fixture() {
   await writeFile(
     join(root, 'agents/writer.md'),
     '---\nname: writer\ndescription: Writes\ntools: [hold]\nisolate: worktree\n---\nOnly write the report.\n',
+  )
+  await writeFile(
+    join(root, 'agents/watcher.md'),
+    '---\nname: watcher\ndescription: Watches\nresident: true\n---\nWatch the project.\n',
   )
   const prepared = await prepareHarness({
     ultimateRoot: root,
@@ -87,7 +93,15 @@ async function fixture() {
     extensions: () => [{ name: 'subagents', enabled }],
     ...apis(provided),
   }
+  const standing = vi.fn<SubagentsService['standing']>(async () => {
+    const conversation = await opened.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
+      context,
+    )
+    return conversation.id
+  })
   provided.set('subagents', {
+    standing,
     createChild: (tx, options) => createChild(host, tx, options),
   } satisfies Partial<SubagentsService>)
   const extension = automations(host as unknown as Parameters<typeof automations>[0])
@@ -116,6 +130,8 @@ async function fixture() {
   return {
     prepared,
     extension,
+    service: provided.get('automations') as AutomationsService,
+    standing,
     disableDependency: () => {
       enabled = false
     },
@@ -286,6 +302,72 @@ it('catches up a missed fire exactly once after reopening', async () => {
   const a = (await f.records())[0]
   expect(a.runs).toHaveLength(1)
   expect(a.enabled).toBe(false)
+})
+
+it.each([
+  { schedule: 'every 15m' },
+  { event: { name: 'workspaces.check', where: { result: 'failed' } } },
+  { condition: { metric: 'context', of: '#1', above: 80 } },
+  { condition: { metric: 'context', of: '@watcher', above: 80 } },
+] satisfies Partial<CreateArgs>[])(
+  'validates without mutations before creating $schedule $event $condition',
+  async (trigger) => {
+    const f = await fixture()
+    const args: CreateArgs = {
+      name: 'Validated',
+      prompt: 'Hello',
+      agent: 'writer',
+      ...trigger,
+    }
+    const commit = vi.spyOn(f.opened.harness, 'commit')
+    const createConversation = vi.spyOn(f.opened.harness, 'createConversation')
+    await f.service.validateCreate(args)
+    expect(commit).not.toHaveBeenCalled()
+    expect(createConversation).not.toHaveBeenCalled()
+    expect(f.standing).not.toHaveBeenCalled()
+    expect(await f.records()).toEqual([])
+    commit.mockRestore()
+    createConversation.mockRestore()
+
+    const created = await f.service.create(args)
+    expect(created).toMatchObject({ name: 'Validated', agent: 'writer', enabled: true })
+    expect(await f.records()).toEqual([created])
+    expect(f.standing.mock.calls.map(([name]) => name)).toEqual(
+      'condition' in trigger && trigger.condition?.of === '@watcher' ? ['watcher'] : [],
+    )
+  },
+)
+
+it('rejects a removed profile after validation without changing records, tasks or conversations', async () => {
+  const f = await fixture()
+  const args: CreateArgs = {
+    name: 'Removed profile',
+    schedule: 'every 15m',
+    prompt: 'Hello',
+    agent: 'writer',
+  }
+  await f.service.validateCreate(args)
+  const state = () =>
+    f.opened.harness.commit(
+      async (tx) => ({
+        automations: JSON.parse(JSON.stringify(await tx.doc(Automations))),
+        tasks: await tx.scanTasks({}, 100),
+        conversations: await tx.scanConversations({}, 100),
+      }),
+      context,
+    )
+  const before = await state()
+  await f.removeProfile()
+  const commit = vi.spyOn(f.opened.harness, 'commit')
+  const createConversation = vi.spyOn(f.opened.harness, 'createConversation')
+  await expect(f.service.validateCreate(args)).rejects.toThrow('Unknown agent: writer')
+  await expect(f.service.create(args)).rejects.toThrow('Unknown agent: writer')
+  expect(commit).not.toHaveBeenCalled()
+  expect(createConversation).not.toHaveBeenCalled()
+  expect(f.standing).not.toHaveBeenCalled()
+  commit.mockRestore()
+  createConversation.mockRestore()
+  expect(await state()).toEqual(before)
 })
 
 it('fails removed profiles clearly and requires the subagents extension', async () => {

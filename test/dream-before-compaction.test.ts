@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
@@ -54,6 +56,11 @@ afterEach(async () => {
 
 async function fixture() {
   const home = await temp('ultimate-dream-compaction-')
+  await mkdir(join(home, 'agents'))
+  await writeFile(
+    join(home, 'agents/ultimate.md'),
+    '---\nname: ultimate\ndescription: Coordinates\nresident: true\n---\nCoordinate the project.\n',
+  )
   const prepared = await prepareHarness({
     ultimateRoot: home,
     userHome: home,
