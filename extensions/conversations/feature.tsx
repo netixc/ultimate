@@ -70,7 +70,7 @@ export function ConversationRef({
       className={cn('inline-flex max-w-full min-w-0 items-center gap-1.5', className)}
       data-conversation-ref={id}
     >
-      {feature && <FeatureTag className="shrink-0" feature={feature} />}
+      {feature && <FeatureTag feature={feature} />}
       {name && (
         <span className="min-w-0 truncate" title={name}>
           {name}
