@@ -318,7 +318,12 @@ export function compactionDream(
         delete doc.waiting
         return result
       }
-      if (late > DREAM_LATE_MS) waiting.unseen = (waiting.unseen ?? 0) + late
+      if (late > DREAM_LATE_MS) {
+        // This commit can survive without the wait's next due checkpoint: count only the part not yet recorded.
+        const since = Math.max(now - late, waiting.accountedThrough ?? now - late)
+        waiting.unseen = (waiting.unseen ?? 0) + Math.max(0, now - since)
+        waiting.accountedThrough = Math.max(waiting.accountedThrough ?? now, now)
+      }
       const since = waiting.at + (waiting.unseen ?? 0)
       // Expired first: a wait that saw its whole deadline pass gives up instead of starting a stale dream. The
       // request stays, marked, until its note is left: a crash in between leaves the note on the next look.
