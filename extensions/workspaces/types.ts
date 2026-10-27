@@ -25,7 +25,7 @@ export type QueueEntry = {
   step?: string
   /** What the lander did so far, as its conversation logs it. */
   steps: LanderStep[]
-  /** What its fast-forward landed: recorded with it, so any later lander task pushes and reports that. */
+  /** The first local landing: kept for failure and task recovery even if a push retry lands a newer revision. */
   landed?: Landed
   /** Set while the lander's model works on its failure, by the definition's `onFailure`. */
   agent?: 'fix' | 'diagnose'

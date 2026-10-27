@@ -1896,6 +1896,115 @@ it.concurrent('resumes a landing interrupted before its push: pushes and reports
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
   expect(await messageLog(f)).toEqual([])
 })
+it.concurrent('reports the checked and pushed revision after a successful changed-SHA push retry', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander(
+    { push: 'origin', deploy: { agent: 'deploy-test', paths: ['cloud/'] } },
+    paths,
+  )
+  await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(f.directory, '.ultimate/agents/deploy-test.md'),
+    '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
+  )
+  const handoffs: string[] = []
+  f.host.implement(Handoff, {
+    send: async (_from, input) => {
+      handoffs.push(input.text)
+      return 1
+    },
+  })
+  const checked = join(f.directory, 'checked')
+  f.host.projectSettings = async () => ({
+    lander: {
+      push: 'origin',
+      checks: [`git rev-parse HEAD >> '${checked}'`],
+      deploy: { agent: 'deploy-test', paths: ['cloud/'] },
+    },
+  })
+  // Hold both pushes, so the test can inspect the original durable receipt after the retry fast-forward too.
+  await writeFile(
+    join(f.projectRoot, '.git/hooks/pre-push'),
+    `#!/bin/sh
+cat >/dev/null
+for stage in first retry; do
+  [ ! -f '${f.directory}/'$stage-started ] || continue
+  touch '${f.directory}/'$stage-started
+  while [ ! -f '${f.directory}/'$stage-gate ]; do sleep 0.02; done
+  break
+done
+`,
+    { mode: 0o755 },
+  )
+  const started = (stage: string) =>
+    until(() =>
+      access(join(f.directory, `${stage}-started`)).then(
+        () => true,
+        () => false,
+      ),
+    )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await mkdir(join(workspace.path, 'cloud'))
+  const tip = await commit(workspace.path, 'cloud/submitted.txt')
+  const base = await git(f.projectRoot, 'rev-parse', 'main')
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  await started('first')
+  const original = (await index())!.queue[0].landed!
+  expect(original).toMatchObject({ sha: tip, base, paths: ['cloud/submitted.txt'] })
+  // A nonconflicting remote advance rejects the first push and makes the retry merge/check a new revision.
+  const other = join(f.directory, 'other')
+  await git(f.directory, 'clone', '-q', bare, other)
+  await git(other, 'config', 'user.email', 'test@example.com')
+  await git(other, 'config', 'user.name', 'Test')
+  await mkdir(join(other, 'server'))
+  await commit(other, 'server/remote.ts')
+  await git(other, 'push', '-q', 'origin', 'main')
+  await writeFile(join(f.directory, 'first-gate'), '')
+  await started('retry')
+  const final = await git(f.projectRoot, 'rev-parse', 'main')
+  expect(final).not.toBe(tip)
+  expect((await index())!.queue[0].landed).toEqual(original)
+  expect((await readFile(checked, 'utf8')).trim().split('\n')).toEqual([tip, final])
+  await writeFile(join(f.directory, 'retry-gate'), '')
+  const [report] = await submitted(f, id)
+  const commits = (await git(f.projectRoot, 'log', '--oneline', `${base}..${final}`)).split('\n')
+  const result = (await index())!.results[submission]
+  expect(await git(bare, 'rev-parse', 'main')).toBe(final)
+  expect(result).toMatchObject({
+    outcome: 'landed',
+    sha: final,
+    base,
+    commits,
+    paths: ['cloud/submitted.txt', 'server/remote.ts'],
+    pushed: 'origin/main',
+    needsRestart: true,
+  })
+  expect((await f.service.get(id, context))!.landed).toBe(final)
+  expect(report).toContain(`landed as ${final.slice(0, 7)} on main.`)
+  expect(report).toContain('server/remote.ts')
+  expect((await landerLog(f)).log.at(-1)).toMatchObject({ step: 'deploy → @deploy-test' })
+  expect((await landerLog(f)).log.findLast((line) => line.outcome)).toMatchObject({
+    sha: final,
+    base,
+    commits,
+  })
+  const events = await f.host.eventLog.recent({ events: [SubmissionLanded] })
+  expect(events).toHaveLength(1)
+  expect(events[0].data).toMatchObject({
+    sha: final,
+    base,
+    commitCount: commits.length,
+    paths: ['cloud/submitted.txt', 'server/remote.ts'],
+    pushed: 'origin/main',
+  })
+  expect(handoffs).toHaveLength(1)
+  expect(handoffs[0]).toContain(`Please deploy landed commit ${final}.`)
+  expect(handoffs[0]).toContain(commits.join('\n'))
+  expect(handoffs[0]).toContain('Matching paths:\ncloud/submitted.txt')
+})
 it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()
   const f = await lander({ push: 'origin' }, paths)
