@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { readFile, readdir, writeFile, rename } from 'node:fs/promises'
+import { readFile, readdir, realpath, writeFile, rename } from 'node:fs/promises'
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { alive, readOwner } from './lock.ts'
 
@@ -38,11 +38,15 @@ async function readJson<T>(path: string): Promise<T | undefined> {
   }
 }
 export async function projects(userHome: string, currentHome: string): Promise<ProjectInfo[]> {
-  const directory = join(userHome, '.ultimate/projects')
-  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
-  const homes = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(directory, entry.name))
+  currentHome = await realpath(currentHome)
+  const homes: string[] = await realpath(join(userHome, '.ultimate/projects'))
+    .then(async (directory) =>
+      (await readdir(directory, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(directory, entry.name)),
+    )
+    // An absent or unreadable projects directory adds no known homes; the current home is still listed.
+    .catch(() => [])
   if (!homes.includes(currentHome)) homes.push(currentHome)
   return Promise.all(
     homes.toSorted().map(async (home) => {
