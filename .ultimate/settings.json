@@ -1,6 +1,6 @@
 {
   "extensions": {
-    "enable": ["voice-live"]
+    "enable": ["voice-live", "discord"]
   },
   "summaryModel": "openai/gpt-6-luna:medium",
   "instance": {
