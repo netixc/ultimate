@@ -98,6 +98,16 @@ export type LanderAsk = Pick<
 export type WorkspaceIndex = {
   items: Record<string, Workspace>
   queue: QueueEntry[]
+  /** Finished submissions waiting for coordinator input admission, independent of retained results. */
+  pendingReports: Record<
+    string,
+    {
+      source: string
+      conversationId: number
+      text: string
+      outcome: WorkspaceIndex['results'][string]
+    }
+  >
   /** Live lander task per source checkout. */
   landers: Record<string, number>
   /** The lander conversation per source checkout, where its task runs and logs. */

@@ -39,32 +39,40 @@ import type { KeptWork } from '../conversations/types.ts'
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: WorkspacesDoc.kind,
   checkpointWhen: () => false,
-  version: 4,
+  version: 5,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ items: {}, queue: [], landers: {}, landerConversations: {}, results: {} }),
+  initial: () => ({
+    items: {},
+    queue: [],
+    pendingReports: {},
+    landers: {},
+    landerConversations: {},
+    results: {},
+  }),
   migrate: (value, from) => {
+    let index = value as WorkspaceIndex
     if (from < 3)
-      return {
-        ...(from < 2
-          ? { items: (value as Pick<WorkspaceIndex, 'items'>).items, queue: [], landers: {} }
-          : (value as Pick<WorkspaceIndex, 'items' | 'queue' | 'landers'>)),
+      index = {
+        ...(from < 2 ? { items: index.items, queue: [], landers: {} } : index),
+        pendingReports: {},
         landerConversations: {},
         results: {},
       }
     // Version 4 records each submission's steps; earlier ones start without.
-    const index = value as WorkspaceIndex
-    return {
-      ...index,
-      queue: index.queue.map((item) => ({ ...item, steps: [] })),
-      results: Object.fromEntries(
-        Object.entries(index.results).map(([id, result]) => [
-          id,
-          { ...result, tip: id.split('-')[1], steps: [] },
-        ]),
-      ),
-    }
+    if (from < 4)
+      index = {
+        ...index,
+        queue: index.queue.map((item) => ({ ...item, steps: [] })),
+        results: Object.fromEntries(
+          Object.entries(index.results).map(([id, result]) => [
+            id,
+            { ...result, tip: id.split('-')[1], steps: [] },
+          ]),
+        ),
+      }
+    return { ...index, pendingReports: {} }
   },
 })
 /**
@@ -268,15 +276,18 @@ export function workspaces(host: Host) {
     }, context)
   }
   /**
-   * Restart the lander of every source whose queue holds submissions but whose task ended without draining it, as a
-   * task faulted by a reload of this code does. Idempotent: a source with a live task keeps it.
+   * Restart the lander of every source with queued submissions or pending reports whose task ended without draining
+   * them, as a task faulted by a reload of this code does. Idempotent: a source with a live task keeps it.
    */
   async function resume(context: Context) {
     const restarted = await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
-      const sources = [...new Set(index.queue.map((item) => item.source))].filter(
-        (source) => index.landerConversations[source] !== undefined,
-      )
+      const sources = [
+        ...new Set([
+          ...index.queue.map((item) => item.source),
+          ...Object.values(index.pendingReports).map((item) => item.source),
+        ]),
+      ].filter((source) => index.landerConversations[source] !== undefined)
       const stopped: string[] = []
       for (const source of sources) if (await landerIdle(tx, index, source)) stopped.push(source)
       for (const source of stopped) {
