@@ -36,9 +36,11 @@ compaction** (`condition {metric: 'context', of: '@ultimate', above: 70}`, subsc
 chapter when the harness opens or @ultimate first starts; its id is kept in `dream.after-compaction` on conversation 1
 (the kind keeps its first name). It shows in the Automations panel like any other: the threshold is edited there,
 pausing it stops the dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it
-again only as the seed carried it (`builtIn`; paused stays paused). As any condition it fires once, re-arms 10 points
-below the threshold and waits an hour between fires. `@ultimate` resolves to @ultimate's conversation, so it follows
-@ultimate across chapters.
+again only as the seed carried it (`builtIn`; paused stays paused). As any condition it fires once and re-arms only
+when context usage is strictly below `above - min(10, above / 2)`: half the threshold below 20, the unchanged 10-point
+gap at or above 20. The one-hour cooldown still applies after re-arming. See automations' `condition.ts` helper
+`rearmBelow` and the low-threshold regression in `test/automations-triggers.test.ts`. `@ultimate` resolves to
+@ultimate's conversation, so it follows @ultimate across chapters.
 
 Beside it dream ships **Dream after a pause** (`condition {metric: 'context', of: '@ultimate', above: 50, idleFor:
 8 h}`), kept the same way in `dream.after-pause` and carried as the seed's `builtInPause`. It dreams while the user is

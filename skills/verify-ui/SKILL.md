@@ -22,6 +22,9 @@ Never claim a UI change works without an image of it.
 - `eval` takes one expression and returns its value: `document.title`,
   `[...document.querySelectorAll('[data-entry-id]')].length`. Statements or `await` go in an async IIFE:
   `(async () => { const r = await fetch('/api/x'); return r.status })()`. A bare `const x = …; return x` fails.
+- Repository module paths are not served URLs: Vite's root is `web`, so `web/src/sdk/client.ts` is served as
+  `/src/sdk/client.ts`, not `/web/src/sdk/client.ts` (`web/index.html` loads `/src/main.tsx`). Inspect the actual served
+  path before importing a module in `eval`.
 - Scope selectors to the card or panel under test: `[data-entry-id="42"] button:has-text("Retry")`, not
   `button:has-text("Retry")`, which clicks the first match anywhere on the page.
 - Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then

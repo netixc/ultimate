@@ -32,7 +32,8 @@ branch with `branch`, prompt:
 
 > Dream session N. Follow "For the dream branch" in the clone's extensions/dream/DREAM.md.
 
-Name the memory slugs the user cares about most in it, always including the memory about the user (`about-<name>`).
+Name the memory slugs the user cares about most in it, always including the actual existing slug of the memory
+about the user; read the memory index rather than assuming a slug or a name.
 The branch answers you with the journal's proposals as a `Decisions:` block; its card is already in your conversation.
 Relay the decisions to the user as one message with structured `questions`; at night they wait for the morning. Only
 during a hands-off goal do you decide them in the user's place: decide each proposal as the user would (keep what is
@@ -51,8 +52,9 @@ The session ends by itself once every proposal is settled; the user can also end
 
 When the built-in automation's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
 applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
-it, the input asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point
-at the card's Fall asleep button, which only they press. Never call `asleep` for it yourself.
+it, the input asks you to ask the user. Exception: an automation-triggered Dream after a pause asks regardless of
+change count. When asked, send one message with a `choice` question (Fall asleep now / Later) and point at the card's
+Fall asleep button, which only the user presses. Never call `asleep` for it yourself.
 
 ## For the dream branch
 
