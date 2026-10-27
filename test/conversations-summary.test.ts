@@ -888,6 +888,54 @@ it('writes each branch abstract atomically with its accepted answer and reuses i
   expect(fixture.generated.mock.calls[1][3]).toBe(false)
 })
 
+// Abridged historical regressions: #1/7024 and #1/14143 established milestones that
+// #1/14234 and #1/14394 later lost while #6542 discussed only emulator coordination.
+// This checks the evidence sent to the summarizer, not a model's interpretation of it.
+it.each([
+  {
+    milestone: 'completed assessment',
+    previous: [
+      'Ask: Assess notification behavior and recommend the Android equivalent; build nothing.',
+      'Diverged: Existing foreground-service route; open question cards, no direct answers.',
+      'State: Assessment complete; no changes or tests run. No commits named.',
+      'Open: Choose question-card navigation or separately authorize direct-answer actions.',
+    ].join('\n'),
+    reply:
+      'Noted. I will not use ADB and will keep both faux fixtures intact until explicit lease return and live companion verification.',
+  },
+  {
+    milestone: 'verified delivery',
+    previous: [
+      'Ask: Deliver the approved Android notification release and companion; clean up owned previews.',
+      'Diverged: Existing foreground-service route; no Firebase.',
+      'State: 6810dd23 and 4569cc4 integrated/pushed; CI passed (287 Android checks, 4 companion tests). Signed APK delivered. Companion trust undecided; companion not loaded. Direct-switch-only APK is not final after the microphone fix.',
+      'Open: Emulator retest/release; owner trust and live companion verification; native phone verification; then clean up owned previews.',
+    ].join('\n'),
+    reply:
+      'The finished notification is not a lease release: the tester awaits a decision on the extra Android audio permission needed by the real microphone test. I will stay off ADB and keep both fixtures available. No cleanup yet.',
+  },
+])(
+  'passes the $milestone to an abstract refresh about unrelated blockers',
+  async ({ previous, reply }) => {
+    const fixture = await launch(false, false, false, true)
+    await fixture.server.harness.commit(async (tx) => {
+      ;(await tx.doc(Summaries, fixture.server.root.id)).abstract = previous
+    }, context)
+    fixture.server.host.faux!.setResponses([fauxAssistantMessage(reply)])
+    const submission = await fixture.server.root.submit(
+      { type: 'input', content: 'Keep the emulator lease and fixtures available.' },
+      context,
+    )
+    expect((await submission.wait(context)).status).toBe('done')
+    await until(async () => (await fixture.read())?.assessmentStatus === 'ready')
+    expect(fixture.generated).toHaveBeenCalledTimes(1)
+    const input = fixture.generated.mock.calls[0][1]
+    expect(input).toContain(`Previous abstract:\n${previous}\n\n`)
+    expect(input).toContain(`assistant: ${reply}`)
+    expect(fixture.generated.mock.calls[0][7]).toBe(true)
+  },
+)
+
 it.each(['error', 'aborted'] as const)(
   'does not abstract an %s main answer',
   async (stopReason) => {
@@ -1151,7 +1199,17 @@ it('validates reply-only JSON and rejects a malformed activity', async () => {
     true,
   )
   expect(abstractResult.abstract).toBe('x'.repeat(1200))
-  expect(stream.mock.calls.at(-1)![1].systemPrompt).toContain('"abstract"')
+  const abstractPrompt = stream.mock.calls.at(-1)![1].systemPrompt
+  expect(abstractPrompt).toContain('"abstract"')
+  expect(abstractPrompt).toContain(
+    'preserve previously verified completed milestones unless new evidence revokes them',
+  )
+  expect(abstractPrompt).toContain(
+    'Absence from the recent transcript is not evidence that completed work is undone or still pending',
+  )
+  expect(abstractPrompt).toContain(
+    'Update open questions and blockers without inventing success or other facts',
+  )
   expect(stream.mock.calls.at(-1)![2]?.maxTokens).toBe(2048)
   output = { activity: 'Done.' }
   await expect(
