@@ -20,6 +20,8 @@ const commit = (root: string, ...args: string[]) =>
 async function diverged(home: string) {
   const root = await sourceCopy(home)
   await git(root, 'init', '-q', '-b', 'main')
+  // Keep the source object store stable while the local clone copies it.
+  await git(root, 'config', 'maintenance.auto', 'false')
   await git(root, 'add', '-A')
   await commit(root, '-m', 'base')
   const upstream = join(home, 'upstream.git')
