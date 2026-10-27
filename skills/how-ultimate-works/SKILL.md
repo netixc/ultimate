@@ -69,15 +69,17 @@ Remember the answer: it goes into the memory about the user at setup.
 - After the dream, **Fall asleep** starts a fresh chapter from the handoff and the memories. Nothing is deleted; the
   old chapter stays readable. A fresh chapter matters because I may have just been improved, and you want the new
   version working without stale knowledge. It happens only when it's worth it, and only with your tap.
-- That's why I work best on a model with a **1M-token context window** or more.
-- The recommendation for me (and ideally for coordinators) is **Claude Code Opus 5.5**; the other agents are your
-  choice.
+- A large context window helps keep long-running work together; **1M tokens or more** is useful when available.
+- Within your chosen provider policy, we can choose a model for me and coordinators; the other agents are your choice.
+  When Claude Code is allowed and available, the README recommends **Opus 5.5**, with its experimental-provider caveat.
 
-Check the facts in your input: when your model's context window is under 1M tokens, name the model and its window
-and recommend a 1M+ model (the model button under the composer, or ⌘K → Pick a model).
+Check the facts in your input and available models (`ultimate.models()`). When your model's context window is under
+1M tokens, name the model and its window. Recommend a 1M+ model only within the user's chosen provider policy and
+with a login; never suggest a fallback provider. If none is available, explain that compaction keeps work going on
+the current model. Switching is optional (the model button under the composer, or ⌘K → Pick a model).
 
-Question (choice): "Ready for the last one?" — Yes · Tell me more about dreams · Switch model first (only when under
-1M) · Skip the rest
+Question (choice): "Ready for the last one?" — Yes · Tell me more about dreams · Switch model first (only when an
+allowed, available upgrade was offered) · Skip the rest
 
 ## Beat 5: your project
 

@@ -28,9 +28,9 @@ place.
 - **One familiar core everywhere.** The conversation, Pi's tools, the model and login, and the way it works are the same
   in every project; only the project's own pieces differ. Your personal additions live in `~/.ultimate/` and follow you
   to every project.
-- **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
-  subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
-  of them off per machine or per project (see "Building blocks" below).
+- **Built-in building blocks, most on by default.** Subagents, plans, documents, automations and the rest ship in
+  the clone. Some, including remote access, need explicit enabling; configure them per machine or per project
+  (see "Building blocks" below).
 - **A forest of conversation trees.** Each root keeps a read-only context: branch intents, latest conversation abstracts,
   and landings with divergence and links back to their source. Talk to @ultimate in its conversation: it starts coordinator
   branches that inherit a root's context before their prompt. Resuming a branch catches it up on what its tree learned.
@@ -70,7 +70,7 @@ Stop and ask me whenever a step needs my password, a login or a decision.
 ```
 
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
-with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
+with the conversation, model and thinking controls, login, and footer, plus the building blocks enabled by default.
 
 Needs Node 26 and pnpm; you log in to a model provider on first start, not before. Ultimate shares `~/.pi/agent` with
 `pi` (credentials, models, settings); personal skills and instructions go in `~/.ultimate/skills/` and
@@ -106,8 +106,9 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
 
 We recommend running @ultimate on Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`), and ideally the
 coordinators too; the other agents are your choice. Coordinators inherit @ultimate's model unless a definition pins
-one, so choosing Opus 5.5 for @ultimate covers both (this repository's `.ultimate/agents/coordinator.md` overlay pins
-it with high thinking). To set it up, install the CLI (`npm install -g @anthropic-ai/claude-code`), run
+one, so choosing Opus 5.5 for @ultimate covers both unless an overlay chooses otherwise. This repository's
+`.ultimate/agents/coordinator.md` currently pins OpenAI Sol 6.1 with high thinking. To set up Claude Code, install the
+CLI (`npm install -g @anthropic-ai/claude-code`), run
 `claude auth login`, then pick the model in the model picker; ⌘K → **Claude Code setup…** shows the login status. The
 [Claude Code provider](extensions/claude-code/README.md) is experimental: it depends on Claude Code's protocol and
 account limits, and subscription coverage is not guaranteed. This is a recommendation only; no default changes.
@@ -166,13 +167,14 @@ The building blocks that make it possible:
 
 ## Building blocks
 
-Built-ins live in the clone's `extensions/`, and every one is on by default; `tailscale` exposes Ultimate only to your
-own Tailscale login. Each folder's README describes the building block.
+Built-ins live in the clone's `extensions/`, and most are on by default. `cloud`, `parallel`, `tailscale`, `health`,
+`classify`, `phase`, `sounds` and `voice-live` ship off (the `defaultOff` list in `shared/extension-api.ts`). Once
+enabled, `tailscale` exposes Ultimate only to your own Tailscale login. Each folder's README describes the building block.
 
-Turn them off in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
+Configure them in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
 
 ```json
-{ "extensions": { "disable": ["tailscale", "claude-code"] } }
+{ "extensions": { "enable": ["tailscale"], "disable": ["claude-code"] } }
 ```
 
 See [discovery and settings](docs/settings.md) for precedence, enabling extensions, project trust and live updates.
