@@ -520,6 +520,38 @@ it('does not count a Pause or a stopped host against the wait: a late look moves
   expect(f.deps.start).not.toHaveBeenCalled()
 })
 
+it('accounts a late look once when its next checkpoint is lost and the same due replays', async () => {
+  const f = await fixture()
+  const { request, Wait } = compactionDream(f.host, f.deps)
+  const { task: wait } = await f.harness.commit((tx) => request(tx, 0, f.ultimate), context)
+  const due = 25 * 60_000
+  const pause = 10 * 3600_000
+  const now = due + pause
+  const runtime = {
+    now: () => now,
+    sleepUntil: vi
+      .fn<(...args: unknown[]) => Promise<void>>(async () => {})
+      .mockRejectedValueOnce(new Error('Lost next checkpoint')),
+    commit: vi.fn<() => Promise<void>>(async () => {}),
+  }
+  const task = {
+    id: String(wait),
+    state: { status: 'running', checkpoint: { phase: 'look', due } },
+  }
+  const run = () => Wait.definition.phases.look(task as never, runtime as never, context)
+  // The lateness adjustment commits, but the task never saves its next due.
+  await expect(run()).rejects.toThrow('Lost next checkpoint')
+  expect((await f.waiting())?.unseen).toBe(pause)
+  // Recovery replays the old due, without extending either deadline a second time.
+  await run()
+  expect((await f.waiting())?.unseen).toBe(pause)
+  expect(runtime.sleepUntil.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+    now + DREAM_LOOK_MS,
+    { phase: 'look', due: now + DREAM_LOOK_MS },
+  ])
+  expect(f.deps.start).not.toHaveBeenCalled()
+})
+
 it('gives a request whose wait faulted a new wait, keeping its handoff, and ends one whose wait was aborted', async () => {
   const f = await fixture()
   const { healed } = compactionDream(f.host, f.deps)

@@ -73,6 +73,8 @@ export type Waiting = {
    * or a restart does not use them up.
    */
   unseen?: number
+  /** Latest time included in `unseen`, so replaying a look with its old due counts no interval twice. */
+  accountedThrough?: number
   gaveUp?: true
   /** `pause`: how long the user had been away (ms) when "Dream after a pause" fired. */
   automation?: { id: string; name: string; pause?: number }
