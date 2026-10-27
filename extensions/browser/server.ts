@@ -348,12 +348,19 @@ export default function browserExtension(host: ExtensionHost) {
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
       const url = new URL(args.url ?? '', host.system().process.url).href
       // Any Ultimate page, this UI or a preview, gets `window.ultimate` for send/until steps.
-      await guard(page.addInitScript(() => sessionStorage.setItem('ultimate.driven', '1')))
+      await guard(
+        page.addInitScript(() => {
+          // Test hooks belong to the top-level web UI, never an opaque-origin artifact frame or a data page.
+          if (window !== window.top || !['http:', 'https:'].includes(location.protocol)) return
+          sessionStorage.setItem('ultimate.driven', '1')
+        }),
+      )
       if (new URL(url).origin === new URL(host.system().process.url).origin) {
         // Own UI: this page is detached from the shared UI state (web/src/sdk/client.ts), so its `?conversation=`
         // and clicks never move the user's tabs; the theme is this browser's preference.
         await guard(
           page.addInitScript((theme: string | undefined) => {
+            if (window !== window.top || !['http:', 'https:'].includes(location.protocol)) return
             sessionStorage.setItem('ultimate.detached', '1')
             if (theme) localStorage.setItem('ultimate.theme', theme)
           }, args.theme),

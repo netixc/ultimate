@@ -1,4 +1,6 @@
 import { access } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
@@ -40,6 +42,56 @@ it('times out a hung step, closes its page and keeps later calls working', async
     }
   } finally {
     for (const close of closers) await close()
+    await removeTemp(directory)
+  }
+})
+
+it('keeps browser instrumentation out of opaque artifact frames', async () => {
+  const directory = await temp('ultimate-browser-sandbox-')
+  const closers: (() => Promise<void>)[] = []
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'text/html')
+    response.end(`<!doctype html><title>Sandbox</title>
+      <script>addEventListener('message', e => {
+        if (e.data === 'frame-ready') document.body.dataset.ready = 'yes'
+      })</script>
+      <iframe sandbox="allow-scripts" srcdoc="<script>parent.postMessage('frame-ready','*')</script>"></iframe>`)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const host = {
+    home: join(directory, 'home'),
+    projectRoot: directory,
+    resource: <T>(_name: string, create: () => T) => create(),
+    onClose: (close: () => Promise<void>) => closers.push(close),
+    system: () => ({ process: { url } }),
+  } as unknown as ExtensionHost
+  const browser = browserExtension(host).tools!.find((tool) => tool.name === 'browser')!
+  try {
+    const result = await browser.execute(
+      {
+        url,
+        steps: [
+          { wait: 'body[data-ready="yes"]' },
+          {
+            eval: "[sessionStorage.getItem('ultimate.driven'), sessionStorage.getItem('ultimate.detached')]",
+          },
+        ],
+        screenshot: false,
+      },
+      { output() {} } as unknown as ToolExecutionApi,
+      context,
+    )
+    expect(result.isError).toBeFalsy()
+    const output = JSON.stringify(result.output)
+    expect(output).toContain('Step 2: OK [\\"1\\",\\"1\\"]')
+    expect(output).not.toContain('Page error:')
+    expect(output).not.toContain('Console error:')
+  } finally {
+    for (const close of closers) await close()
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    )
     await removeTemp(directory)
   }
 })
