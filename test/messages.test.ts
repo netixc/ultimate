@@ -1791,9 +1791,17 @@ const servers: Server[] = []
 afterEach(() => {
   for (const server of servers.splice(0)) server.close()
 })
-/** A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. */
+/** A fixture whose @ultimate is conversation 1 and whose other Ultimate answers locally and as `from.machine`. */
 async function remoteFixture(url?: string) {
   const f = await fixture()
+  if (url) {
+    // Replies address the sender's machine explicitly; a local project listing alone cannot route them.
+    await mkdir(join(f.host.userHome, '.ultimate'), { recursive: true })
+    await writeFile(
+      join(f.host.userHome, '.ultimate/settings.json'),
+      JSON.stringify({ remotes: { [from.machine]: { [from.project]: url } } }),
+    )
+  }
   f.provided.set('subagents', {
     residents: async () => [{ name: 'ultimate', description: 'Ultimate' }],
     standing: async () => ROOT_CONVERSATION_ID,
@@ -1829,15 +1837,18 @@ it("delivers another Ultimate's message to @ultimate only, labelled as it, once 
     false,
   )
   // Its answer goes back over the same route, as a reply to that key.
-  await until(() => other.posted.length === 1)
+  await until(async () =>
+    (await f.log())!.messages.some((m) => m.to === 'remote' && m.state !== 'sent'),
+  )
+  const response = (await f.log())!.messages.find((m) => m.to === 'remote')!
+  expect(response.error).toBeUndefined()
+  expect(response.state).toBe('delivered')
+  expect(other.posted).toHaveLength(1)
   expect(other.posted[0]).toMatchObject({
     path: '/api/extensions/messages/actions/remoteReply',
     body: { key: 'k1', failed: false },
   })
   expect((other.posted[0].body as { text: string }).text).toContain('Start a branch that adds X')
-  await until(async () =>
-    (await f.log())!.messages.some((m) => m.to === 'remote' && m.state === 'delivered'),
-  )
   expect((await f.log())!.messages.find((m) => m.from === 'remote')!.state).toBe('answered')
 })
 it("returns another Ultimate's answer as a reply once, and refuses a reply to a reply", async () => {
