@@ -6,3 +6,6 @@ thinking: high
 fast: true
 addTools: []
 ---
+
+Keep public PR descriptions to relevant scope, changes and verification; unrelated work, internal coordination and
+needless exclusions stay internal.
