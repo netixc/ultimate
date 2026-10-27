@@ -599,10 +599,11 @@ async function tracedTools(tools: Record<string, Execute>) {
     name: string,
     api: { conversationId: number; taskId: number; callId: string },
     input: unknown,
+    args = {},
   ) =>
     traced
       .find((tool) => tool.name === name)!
-      .execute({}, { ...api, getTask: async () => ({ input }) } as never, {} as never)
+      .execute(args, { ...api, getTask: async () => ({ input }) } as never, {} as never)
   return { trace, execute }
 }
 const model = (callId: string) => ({ kind: 'model', assistant: 10, callId })
@@ -630,6 +631,43 @@ it('records a tool that returns an error result as failed, with its text', async
   expect(rows.find((row) => row.name === 'fine')).toMatchObject({ ok: true })
   expect(rows.find((row) => row.name === 'fine')).not.toHaveProperty('error')
   trace.close()
+})
+
+it('records Pi Bash diagnostic-only failures by fixed class without copying payloads', async () => {
+  const result = {
+    structuredOutput: {
+      output: 'SENTINEL_STDOUT\nSENTINEL_STDERR',
+      truncated: false,
+      exitCode: 7,
+    },
+    isError: true,
+    diagnostics: [{ severity: 'error', code: 'exit_code', message: 'Command exited with code 7' }],
+  }
+  const original = structuredClone(result)
+  const withOutput = { ...result, output: [{ type: 'text', text: 'preferred error text' }] }
+  const { trace, execute } = await tracedTools({
+    bash: async () => result,
+    text: async () => withOutput,
+  })
+  try {
+    const api = { conversationId: 1, taskId: 1, callId: 'call' }
+    expect(await execute('bash', api, model('call'), { command: 'SENTINEL_ARGS' })).toBe(result)
+    expect(result).toEqual(original)
+    expect(await execute('text', api, model('call'))).toBe(withOutput)
+    const rows = trace.reader.query()
+    expect(rows.find((row) => row.name === 'bash')).toMatchObject({ ok: false, error: 'exit_code' })
+    expect(rows.find((row) => row.name === 'text')).toMatchObject({
+      ok: false,
+      error: 'preferred error text',
+    })
+    for (const row of rows) {
+      expect(row).not.toHaveProperty('args')
+      expect(row).not.toHaveProperty('result')
+    }
+    expect(JSON.stringify(rows)).not.toMatch(/SENTINEL|Command exited with code 7/)
+  } finally {
+    trace.close()
+  }
 })
 
 it("finds a Pi nested call's caller by task and call id, not by a call id another conversation reuses", async () => {

@@ -88,11 +88,19 @@ function failure(error: unknown, credentials: boolean) {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** The text of a tool's error result, cut at about 300 characters. */
-function toolError(output: ToolExecutionResult['output']) {
-  const text = (output ?? [])
+/** The text of a tool's error result, cut at about 300 characters, or a recognized diagnostic class. */
+function toolError(result: ToolExecutionResult) {
+  const text = (result.output ?? [])
     .flatMap((part) => (part.type === 'text' ? [part.text] : []))
     .join('\n')
+  // Diagnostic messages and arbitrary codes can carry private payloads; retain only this fixed class.
+  if (
+    !text.trim() &&
+    result.diagnostics?.some(
+      (diagnostic) => diagnostic.severity === 'error' && diagnostic.code === 'exit_code',
+    )
+  )
+    return 'exit_code'
   return text.length <= LIMIT ? text : text.slice(0, LIMIT) + '…'
 }
 
@@ -397,7 +405,7 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
           try {
             const result = await storage.run(self, () => tool.execute(args, api, context))
             // A tool that returns an error result failed, though it did not throw; its row keeps the error's text.
-            if (result?.isError) finish(false, toolError(result.output))
+            if (result?.isError) finish(false, toolError(result))
             else finish(true, result)
             return result
           } catch (error) {
