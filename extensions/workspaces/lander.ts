@@ -925,14 +925,12 @@ export function createLander(
                       timing,
                     )
                   else
-                    await runtime.commit(async (tx) => {
-                      await host.emit(tx, CheckRan, {
-                        submission: id,
-                        command,
-                        result: ran.timedOut ? 'timeout' : 'failed',
-                        ms: Math.round(timing.ms),
-                      })
-                    }, context)
+                    await step(
+                      `checked: ${command}`,
+                      { command, result: 'failed' },
+                      ran.failure,
+                      timing,
+                    )
                   rerun = await runtime.memo<{ failure?: string }>(
                     `${key}:rerun`,
                     ran.failure === undefined ? {} : { failure: ran.failure },
