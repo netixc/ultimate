@@ -70,8 +70,9 @@ document, tools and model-facing text, where agents and stored entries already u
   first freezes already admitted reply deliveries within the branch's owned tree, through the
   `lineage.landing-replies` point that messages fills, then waits for the lander's report (`lander:<submission>`) to be
   answered and the submitter to go idle. The early snapshot retains failures that occur while the report is running.
-  Their durable callback addresses, child answers and exact parent report receipts must settle before
-  closing; subagents admits any missing recovery Reporter in that same check, so an idle child alone is not proof.
+  Their durable callback addresses (including a linked replacement delivery for an explicit answer), child answers
+  and exact parent report receipts must settle before closing; subagents admits any missing recovery Reporter in
+  that same check, so an idle child alone is not proof.
   New inputs outside those receipts leave the branch open, as do unanswered callbacks, open outgoing questions,
   queued input or still-running subagents. The final receipt/input check, `ConversationsApi.concludeIn` and the task's
   next phase commit together, so a replay never concludes twice; freeing the worktree follows as its own phase. A report that ends

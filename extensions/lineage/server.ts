@@ -645,13 +645,15 @@ function lineage(host: ExtensionHost) {
         const family = new Set(members)
         for (;;) {
           const changed = Promise.withResolvers<void>()
-          // Pi task/submission receipts, not domain events. Subscribe before the transactional check.
+          // Root transport tasks can forward to an explicit-answer delivery. Their transitions wake
+          // the check, but only frozen deliveries and their exact causal links participate in settlement.
+          // Subscribe before the transactional check of Pi receipts, not domain events.
           const unsubscribe = host.harness().subscribeCommits((publication) => {
             if (
               publication.changes.some(
                 (change) =>
                   (change.type === 'task' &&
-                    (deliveries.includes(change.value.id) ||
+                    (change.value.conversationId === ROOT_CONVERSATION_ID ||
                       family.has(change.value.conversationId))) ||
                   (change.type === 'submission' && family.has(change.value.conversationId)),
               )

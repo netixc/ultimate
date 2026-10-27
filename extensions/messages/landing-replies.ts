@@ -25,6 +25,12 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
       if (original?.status === 'unanswered') return { state: 'unanswered', entries }
       const callback = task.state.outcome.result as DeliveryReceipt | null
       if (!callback) continue
+      if ('delivery' in callback) {
+        const forwarded = await settle(tx, [callback.delivery], recover)
+        entries.push(...forwarded.entries)
+        if (forwarded.state !== 'settled') return { state: forwarded.state, entries }
+        continue
+      }
       const input = await tx.submissionByRequest(callback.conversationId, callback.requestId)
       if (!input) return { state: 'unanswered', entries }
       const reply = await host.need(SubagentsApi).settleReply(tx, input)

@@ -7,7 +7,7 @@ import {
   defineTask,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { locate, postAction } from '../../lib/remote.ts'
@@ -26,8 +26,26 @@ import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
 import { remoteLabel } from './addresses.ts'
 
-/** The durable callback address survives task completion, unlike its reply-phase checkpoint. */
-export type DeliveryReceipt = { conversationId: ConversationId; requestId: string }
+/** The durable callback address, or exact task delivering an explicit answer, survives completion. */
+export type DeliveryReceipt =
+  | { conversationId: ConversationId; requestId: string }
+  | { delivery: TaskId }
+
+async function explicitReply(tx: Tx, message: number): Promise<TaskId | undefined> {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanTasks(
+      { conversationId: ROOT_CONVERSATION_ID, kind: 'board.delivery', order: 'descending' },
+      200,
+      cursor,
+    )
+    for (const task of page.items)
+      if ((task.input as { reply?: { message: Message } }).reply?.message.re === message)
+        return task.id
+    cursor = page.next
+  } while (cursor)
+  return undefined
+}
 
 export function delivery(host: ExtensionHost) {
   const refresh = async (id: number, ctx: Context) => {
@@ -46,7 +64,7 @@ export function delivery(host: ExtensionHost) {
       note: boolean
       fromLabel: string
       toLabel: string
-      /** Another project's Ultimate answered `message`: deliver only this reply. */
+      /** An explicit or remote answer to `message`: deliver only this reply. */
       reply?: { message: Message; failed: boolean; stopped?: boolean }
     },
     | { phase: 'deliver' }
@@ -233,7 +251,18 @@ export function delivery(host: ExtensionHost) {
             if (original && answer !== undefined) original.answer = answer
             return terminal
           }
-          // The recipient answered with a message; its final answer stays where it is.
+          // An explicit answer already created its own delivery. Its immutable input names this
+          // original even if the bounded log dropped it; retain the link through task completion.
+          if (typeof m.from === 'number' && (!original || original.state === 'answered')) {
+            const forwarded = await explicitReply(tx, m.id)
+            if (forwarded)
+              return {
+                status: 'terminal',
+                outcome: { status: 'completed', result: { delivery: forwarded } },
+              }
+            if (original) throw new Error(`Answered message ${m.id} has no reply delivery`)
+          }
+          // Answers shown directly to the user have no conversation callback.
           if (original?.state === 'answered') return terminal
           const model =
             answer === undefined ? undefined : (await tx.entry(AssistantEntry, answer))?.model?.[0]

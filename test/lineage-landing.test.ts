@@ -16,6 +16,7 @@ import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { abstract } from '../extensions/lineage/server.ts'
+import { Messages } from '../extensions/messages/api.ts'
 import { Subagents } from '../extensions/subagents/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
@@ -87,7 +88,7 @@ it.concurrent('concludes a landed branch only when its report run answered, neve
   await land(server, landing('s2', id))
   await until(async () => (await concluded(server)).includes(id))
 })
-it.concurrent('drains an admitted child question and its recovered callback report before concluding a landed branch', async () => {
+it.concurrent.each([false, true])('drains landed replies (explicit=%s)', async (explicit) => {
   let parent: ConversationId
   let child: ConversationId
   let decisions = 0
@@ -101,6 +102,7 @@ it.concurrent('drains an admitted child question and its recovered callback repo
   let replyHeld = 0
   let callbackHeld = false
   let recoveryHeld = false
+  let explicitlyAnswered = false
   const setup = (prepared: Awaited<ReturnType<typeof prepareFauxServer>>) => {
     const open = prepared.host.open.bind(prepared.host)
     vi.spyOn(prepared.host, 'open').mockImplementation(async (...args) => {
@@ -253,15 +255,43 @@ it.concurrent('drains an admitted child question and its recovered callback repo
         }),
       }),
     )
-    const route: FauxResponseFactory = (transcript) => {
+    const route: FauxResponseFactory = async (transcript) => {
       prepared.host.faux!.appendResponses([route])
       const last = transcript.messages.findLast((message) => message.role !== 'system')!
       const text = textOf(last.content)
+      if (
+        explicit &&
+        !explicitlyAnswered &&
+        transcript.messages.some(
+          (message) => message.role === 'user' && textOf(message.content).includes('May I finish?'),
+        )
+      ) {
+        // The provider may see placement before delivery has marked the question read.
+        await until(async () =>
+          (await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!.messages.some(
+            (message) =>
+              message.from === child && message.to === parent && message.state === 'delivered',
+          ),
+        )
+        explicitlyAnswered = true
+        return fauxAssistantMessage(
+          [
+            fauxToolCall(
+              'message',
+              { to: `#${child}`, text: 'Parent answered.', reply: true },
+              { id: 'explicit-parent-answer' },
+            ),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
       if (last.role === 'toolResult') {
         if (last.toolName === 'subagent')
           return fauxAssistantMessage([fauxToolCall('landing_hold', {})], { stopReason: 'toolUse' })
         return fauxAssistantMessage(
-          last.toolName === 'message' ? 'Child asked.' : 'Parent answered.',
+          last.toolName === 'message' && last.toolCallId !== 'explicit-parent-answer'
+            ? 'Child asked.'
+            : 'Parent answered.',
         )
       }
       if (text === 'Start child')
@@ -319,6 +349,13 @@ it.concurrent('drains an admitted child question and its recovered callback repo
       context,
     )
     await land(server, landing('callback', parent))
+    await until(async () => {
+      const task = await concludeTask(server, parent, 'callback')
+      return (
+        task?.state.status === 'running' &&
+        (task.state.checkpoint as { phase: string }).phase === 'wait-report'
+      )
+    })
     parentGate.resolve()
     await until(() => replyHeld > 0)
     await branch.waitForIdle(context)
