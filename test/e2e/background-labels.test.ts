@@ -1,5 +1,5 @@
 // Regression: two long feature badges in a compact background row painted over each other on a phone.
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -8,6 +8,7 @@ import { chromium } from 'playwright-core'
 import { afterEach, expect, it } from 'vitest'
 import { browserBinary } from '../../extensions/browser/server.ts'
 import { Overview } from '../../extensions/conversations/overview.ts'
+import { startSession, fileJournal, decide } from '../../extensions/dream/server.ts'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { context } from '../../server/harness.ts'
 import { fauxServer, post, removeTemp, sourceCopy, temp, until } from '../helpers.ts'
@@ -17,17 +18,21 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
 })
 
-it('fits long background feature labels without collisions, retaining names and ids', async () => {
+it('fits long background labels and crowded phone status controls without collisions', async () => {
   const home = await temp('ultimate-background-labels-')
   cleanup.push(() => removeTemp(home))
   const root = await sourceCopy(home)
+  const projectRoot = join(home, 'project')
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await writeFile(join(projectRoot, '.ultimate/settings.json'), '{}')
   await writeFile(
-    join(root, '.ultimate/settings.json'),
+    join(home, '.ultimate/settings.json'),
     JSON.stringify({ summaryModel: 'faux/faux-1', extensions: { disable: ['update'] } }),
   )
   const server = await fauxServer({
     ultimateRoot: root,
-    projectRoot: root,
+    projectRoot,
+    localSetup: false,
     userHome: home,
     home: join(home, 'state'),
     port: 0,
@@ -86,6 +91,25 @@ it('fits long background feature labels without collisions, retaining names and 
     await conversation.submit({ type: 'input', content: 'Send layout checks' }, context)
   ).wait(context)
 
+  // Real dream transitions, confined to this fixture: one proposal still waits on a decision.
+  await server.harness.commit(async (tx) => {
+    const session = await startSession(tx, Date.now())
+    await fileJournal(
+      tx,
+      {
+        session,
+        learned: ['Check labels.', 'Keep controls reachable.', 'Verify on a phone.'],
+        text: 'Layout fixture.',
+        proposals: [
+          { id: 'first', pass: 'project', title: 'First layout check' },
+          { id: 'second', pass: 'project', title: 'Second layout check' },
+        ],
+      },
+      Date.now(),
+    )
+    await decide(tx, { session, proposal: 'first', status: 'rejected' }, Date.now())
+  }, context)
+
   const browser = await chromium.launch({
     executablePath: await browserBinary(),
     headless: true,
@@ -102,6 +126,9 @@ it('fits long background feature labels without collisions, retaining names and 
     .filter({ has: page.locator('[data-feature="Android Notifications"]') })
     .first()
   await row.waitFor()
+  const status = page.locator('.status-line:visible').first()
+  await status.locator('[data-dream-status]').waitFor()
+  await status.getByRole('button', { name: 'project setup' }).waitFor()
   await page.evaluate(() => document.fonts.ready)
   for (const width of [320, 360, 412, 1280]) {
     await page.setViewportSize({ width, height: 800 })
@@ -124,7 +151,21 @@ it('fits long background feature labels without collisions, retaining names and 
           truncated: badge.scrollWidth > badge.clientWidth,
         }
       })
+      const footer = [...document.querySelectorAll('.status-line')].find(
+        (element) => element.getBoundingClientRect().height > 0,
+      )!
+      const strip = footer.firstElementChild!
+      const controls = [...strip.children].map((child) => child.getBoundingClientRect())
+      const more = footer.querySelector('[aria-label="More status"]')?.getBoundingClientRect()
       return {
+        statusOverlap: controls.some(
+          (control, index) => index > 0 && controls[index - 1].right > control.left,
+        ),
+        statusOverflow: [...strip.children].some(
+          (child) => child.scrollWidth > child.clientWidth + 1,
+        ),
+        statusScrolls: strip.scrollWidth > strip.clientWidth,
+        moreRight: more?.right ?? 0,
         left: box.left,
         right: box.right,
         refs,
@@ -144,6 +185,10 @@ it('fits long background feature labels without collisions, retaining names and 
     expect(layout.refs[1].right).toBeLessThanOrEqual(layout.right + 1)
     expect(layout.right).toBeLessThanOrEqual(layout.triggerRight - 12)
     expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
+    expect(layout.statusOverlap).toBe(false)
+    expect(layout.statusOverflow).toBe(false)
+    expect(layout.statusScrolls).toBe(width <= 412)
+    expect(layout.moreRight).toBeLessThanOrEqual(layout.viewport)
     expect(layout.refs.some((ref) => ref.truncated)).toBe(width <= 412)
   }
   expect(errors).toEqual([])
