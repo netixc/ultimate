@@ -172,8 +172,9 @@ it('stores only ciphertext in R2', () => {
   )
   for (const bytes of stored.values()) {
     const text = Buffer.from(bytes)
-    for (const plain of ['SQLite format 3', 'git bundle', key, manifest.id, 'desk'])
-      expect(text.includes(plain)).toBe(false)
+    // A four-byte machine name can occur by chance in a multi-megabyte ciphertext; check its JSON field.
+    for (const plain of ['SQLite format 3', 'git bundle', key, manifest.id, '"machine":"desk"'])
+      expect(text.includes(plain), `R2 object contains plaintext ${plain}`).toBe(false)
     expect(() => JSON.parse(text.toString())).toThrow(SyntaxError)
   }
 })

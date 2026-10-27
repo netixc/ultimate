@@ -3,6 +3,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc, ROOT_CONVERSATION_ID, UsageDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
+import type { TestContext } from 'vitest'
 import { compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/server.ts'
 import { Branch, Branched, Roots } from '../extensions/lineage/api.ts'
 import { Plan, Started } from '../extensions/plan/server.ts'
@@ -18,7 +19,7 @@ import { eventHost, post, seedTally, until } from './helpers.ts'
 import {
   anchor,
   branchFrom,
-  fixture,
+  fixture as sharedFixture,
   image,
   said,
   second,
@@ -30,8 +31,21 @@ import {
 } from './lineage-fixture.ts'
 import type { Server } from './lineage-fixture.ts'
 
-it.concurrent('unlists a root that never became a tally, never a tally or the last root', async () => {
-  const { server } = await fixture()
+// Each test owns its servers: do not retain the whole suite's live servers for one teardown hook.
+async function fixture(test: TestContext, reopen?: string) {
+  const result = await sharedFixture(reopen)
+  test.onTestFinished(async () => {
+    const index = servers.indexOf(result.server)
+    // Restart tests already closed and removed their original server.
+    if (index < 0) return
+    servers.splice(index, 1)
+    await result.server.close()
+  })
+  return result
+}
+
+it.concurrent('unlists a root that never became a tally, never a tally or the last root', async (test) => {
+  const { server } = await fixture(test)
   const create = async () =>
     (await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id
   const [plain, tally, last] = [await create(), await create(), await create()]
@@ -62,8 +76,8 @@ it.concurrent('unlists a root that never became a tally, never a tally or the la
   expect((await unlist(last)).error).toBe(`#${last} is the last root`)
 })
 
-it.concurrent("lists a root's newest landings, notes, branches and compactions, and compacts only a tally", async () => {
-  const { server } = await fixture()
+it.concurrent("lists a root's newest landings, notes, branches and compactions, and compacts only a tally", async (test) => {
+  const { server } = await fixture(test)
   const call = async (name: string, args: unknown) =>
     (await post(server, `/api/extensions/lineage/actions/${name}`, { args })).data
   const plain = (
@@ -179,8 +193,8 @@ it('links each landing to its DiffsHub compare range, from its base or the landi
   ).toEqual(['https://diffshub.com/hazat/ultimate/compare/yyy...zzz'])
 })
 
-it.concurrent('branches from a tally: the root gets the prompt node, the branch starts from the tally and its prompt', async () => {
-  const { server, requests } = await fixture()
+it.concurrent('branches from a tally: the root gets the prompt node, the branch starts from the tally and its prompt', async (test) => {
+  const { server, requests } = await fixture(test)
   await server.harness.commit(async (tx) => {
     ;(await tx.doc(Plan, server.root.id)).epics.E1 = {
       key: 'E1',
@@ -338,8 +352,8 @@ const rootWork = {
   tasks: {},
 }
 
-it.concurrent('empties a branch plan in the commit that places its first input, with no reaction to wait for', async () => {
-  const { server, requests } = await fixture()
+it.concurrent('empties a branch plan in the commit that places its first input, with no reaction to wait for', async (test) => {
+  const { server, requests } = await fixture(test)
   await server.harness.commit(async (tx) => {
     ;(await tx.doc(Plan, server.root.id)).epics.E1 = rootWork
   }, context)
@@ -357,8 +371,8 @@ it.concurrent('empties a branch plan in the commit that places its first input, 
   ).toEqual(['E1'])
 })
 
-it.concurrent('keeps the plan of a branch that answered before its plan was marked started', async () => {
-  const { server } = await fixture()
+it.concurrent('keeps the plan of a branch that answered before its plan was marked started', async (test) => {
+  const { server } = await fixture(test)
   const id = await branchFrom(server, { from: 1, prompt: 'Polish the sidebar' })
   await settled(server, id)
   // As a branch made before the plan hook: its own ledger, and no started marker.
@@ -373,8 +387,8 @@ it.concurrent('keeps the plan of a branch that answered before its plan was mark
   expect((await server.harness.snapshot(Started, id, context))?.started).toBe(true)
 })
 
-it.concurrent('a late branched reaction leaves the title a branch chose since', async () => {
-  const { server } = await fixture()
+it.concurrent('a late branched reaction leaves the title a branch chose since', async (test) => {
+  const { server } = await fixture(test)
   const id = await branchFrom(server, { from: 1, prompt: 'Polish the sidebar' })
   await settled(server, id)
   await server.harness.commit(async (tx) => {
@@ -397,8 +411,8 @@ it.concurrent('a late branched reaction leaves the title a branch chose since', 
   expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe('Renamed sidebar')
 })
 
-it.concurrent('keeps a long prompt out of the tally: one intent line, the prompt in the branch', async () => {
-  const { server, requests } = await fixture()
+it.concurrent('keeps a long prompt out of the tally: one intent line, the prompt in the branch', async (test) => {
+  const { server, requests } = await fixture(test)
   const prompt =
     `Rework the sidebar\n\n${'Every detail of the plan goes here. '.repeat(200)}`.trim()
   const id = await branchFrom(server, { from: 1, prompt })
@@ -417,8 +431,8 @@ it.concurrent('keeps a long prompt out of the tally: one intent line, the prompt
   expect((await server.harness.snapshot(Branch, id, context))?.branch?.intent).toBe(prompt)
 })
 
-it.concurrent('a given title names the branch and its tally line until a summary renames it', async () => {
-  const { server } = await fixture()
+it.concurrent('a given title names the branch and its tally line until a summary renames it', async (test) => {
+  const { server } = await fixture(test)
   const prompt =
     `Size: small, clear change.\n\n${'Every detail of the plan goes here. '.repeat(20)}`.trim()
   const id = await branchFrom(server, { from: 1, prompt, title: '  Branch\n titles  ' })
@@ -442,8 +456,8 @@ it.concurrent('a given title names the branch and its tally line until a summary
   expect((await server.harness.snapshot(Metadata, long, context))?.title).toBe(`${'x'.repeat(59)}…`)
 })
 
-it.concurrent('writes the prompt node of a branch of a branch into the tree root and marks its source', async () => {
-  const { server, requests } = await fixture()
+it.concurrent('writes the prompt node of a branch of a branch into the tree root and marks its source', async (test) => {
+  const { server, requests } = await fixture(test)
   const first = await branchFrom(server, { from: 1, prompt: 'First line' })
   await settled(server, first)
   const answer = (
@@ -481,8 +495,8 @@ it.concurrent('writes the prompt node of a branch of a branch into the tree root
   )
 })
 
-it.concurrent('refuses inputs in a tally and keeps notes as writes', async () => {
-  const { server } = await fixture()
+it.concurrent('refuses inputs in a tally and keeps notes as writes', async (test) => {
+  const { server } = await fixture(test)
   const first = await branchFrom(server, { from: 1, prompt: 'Start' })
   await settled(server, first)
   await expect(server.root.submit({ type: 'input', content: 'Run here' }, context)).rejects.toThrow(
@@ -513,8 +527,8 @@ it.concurrent('refuses inputs in a tally and keeps notes as writes', async () =>
   )
 })
 
-it.concurrent('delivers a branch’s prompt once when the process stops before it is submitted', async () => {
-  const { server, home } = await fixture()
+it.concurrent('delivers a branch’s prompt once when the process stops before it is submitted', async (test) => {
+  const { server, home } = await fixture(test)
   // Without the prompt task's definition the task waits, as if the process went down right after creating the branch.
   const lineage = server.host.registry.snapshot().extension('lineage')!
   server.host.registry.install(
@@ -540,7 +554,7 @@ it.concurrent('delivers a branch’s prompt once when the process stops before i
   await server.close()
   servers.splice(servers.indexOf(server), 1)
 
-  const { server: reopened } = await fixture(home)
+  const { server: reopened } = await fixture(test, home)
   await until(async () => (await prompts(reopened))[0].state.status === 'terminal')
   const conversation = await settled(reopened, id)
   // A rerun of the delivery finds the submitted input by its request id.
@@ -556,8 +570,8 @@ it.concurrent('delivers a branch’s prompt once when the process stops before i
   ])
 })
 
-it.concurrent('defaults a branch to its source’s configuration', async () => {
-  const { server } = await fixture()
+it.concurrent('defaults a branch to its source’s configuration', async (test) => {
+  const { server } = await fixture(test)
   const model = { provider: 'faux', modelId: 'faux-1' }
   const other = await server.harness.createConversation(
     { ownership: { kind: 'ownerless' }, agent: { model, thinkingLevel: 'high' } },
@@ -575,8 +589,8 @@ it.concurrent('defaults a branch to its source’s configuration', async () => {
   await settled(server, followed)
 })
 
-it.concurrent('adds compaction costs and supplemental usage to an existing model ledger', async () => {
-  const { server } = await fixture()
+it.concurrent('adds compaction costs and supplemental usage to an existing model ledger', async (test) => {
+  const { server } = await fixture(test)
   const reported = {
     input: 10,
     output: 20,
@@ -651,8 +665,8 @@ it.concurrent('adds compaction costs and supplemental usage to an existing model
   })
 })
 
-it.concurrent('resolves the root per tree for notes, the prompt and compaction', async () => {
-  const { server } = await fixture()
+it.concurrent('resolves the root per tree for notes, the prompt and compaction', async (test) => {
+  const { server } = await fixture(test)
   server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
   const fork = async (from: ConversationId) => {
     const conversation = (await server.harness.conversation(from, context))!
