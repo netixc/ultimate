@@ -35,7 +35,7 @@ import {
   ComposerAttachmentContext,
   ComposerAttachmentSubmitContext,
 } from '../sdk/composer-attachments.tsx'
-import type { ComposerAttachmentState } from '../sdk/composer-attachments.tsx'
+import type { ComposerAttachmentState, ComposerSubmission } from '../sdk/composer-attachments.tsx'
 import {
   atFirstLine,
   mergedSteer,
@@ -185,6 +185,7 @@ type Draft = ComposerAttachmentState & {
   error?: string
   sending: boolean
   revision: number
+  retry?: ComposerSubmission
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
@@ -212,8 +213,10 @@ function createDraft(id: number | string | undefined) {
     set: (change: Partial<Draft>) => {
       const previous = value
       value = { ...value, ...change }
-      if (change.revision !== undefined && change.revision !== previous.revision)
-        value.requestId = crypto.randomUUID()
+      if (change.revision !== undefined && change.revision !== previous.revision) {
+        value.requestId = change.requestId ?? crypto.randomUUID()
+        value.retry = change.retry
+      }
       if (key && value.images !== previous.images) storeImages(key, value.images)
       if (key && value.attachments !== previous.attachments)
         storeAttachments(key, value.attachments)
@@ -279,7 +282,13 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   ) => {
     const current = draft.get()
     const next = change(current)
-    validateAttachments(next)
+    // Recalled inputs can exceed one message's limit. Always let the user remove them to recover.
+    const adding =
+      next.images.some((image) => !current.images.includes(image)) ||
+      next.attachments.some(
+        (file) => !current.attachments.some((old) => old.id === file.id && old.size >= file.size),
+      )
+    if (adding) validateAttachments(next)
     draft.set({ ...next, revision: current.revision + 1 })
   }
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
@@ -320,43 +329,52 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       return
     }
     draft.set({ sending: true, error: undefined })
-    const mode = busy ? (whenBusy ?? 'steer') : undefined
-    let input = { text: text.trim(), images }
-    let previous: typeof input | undefined
+    const mode = submitted.retry
+      ? submitted.retry.whenBusy
+      : busy
+        ? (whenBusy ?? 'steer')
+        : undefined
+    let input = submitted.retry ?? { text: text.trim(), images }
+    let previous: { text: string; images: Draft['images'] } | undefined
+    let attempt: ComposerSubmission | undefined
     try {
+      validateAttachments(submitted)
       if (target) await target.send(input.text)
       else {
-        // A steer queued behind another joins it as one: the run reads a single steer at its next boundary.
-        previous = mode === 'steer' ? await withdrawQueuedSteer(api, id, inbox) : undefined
+        // Retry the exact uncertain admission before touching the inbox: it may contain our own accepted steer.
+        previous =
+          !submitted.retry && mode === 'steer'
+            ? await withdrawQueuedSteer(api, id, inbox)
+            : undefined
         if (previous) input = mergedSteer(previous, input)
+        attempt = submitted.retry ?? {
+          ...input,
+          attachments: submitted.attachments,
+          whenBusy: mode,
+          requestId: submitted.requestId,
+          conversationId: id,
+        }
         // Sending means following the run from here, wherever the reader had scrolled to.
         events.emit('ultimate:sent', { conversationId: id })
-        const fallback = () => api.submit(input.text, mode, id, input.images)
-        if (attachmentSubmit)
-          await attachmentSubmit(
-            {
-              ...input,
-              attachments: submitted.attachments,
-              whenBusy: mode,
-              requestId: submitted.requestId,
-              conversationId: id,
-            },
-            fallback,
-          )
+        const requestId = attempt.requestId
+        const fallback = () => api.submit(input.text, mode, id, input.images, requestId)
+        if (attachmentSubmit) await attachmentSubmit(attempt, fallback)
         else await fallback()
       }
       clearDraft(draft, submitted)
       if (draft.get().images === submitted.images) draft.set({ images: [] })
       if (draft.get().attachments === submitted.attachments) draft.set({ attachments: [] })
-      draft.set({ requestId: crypto.randomUUID() })
+      draft.set({ requestId: crypto.randomUUID(), retry: undefined })
     } catch (failure) {
-      if (key && draft.get().revision === submitted.revision)
-        draft.set({ text: localStorage.getItem(key) ?? '' })
+      const unchanged = draft.get().revision === submitted.revision
+      if (key && unchanged) draft.set({ text: localStorage.getItem(key) ?? '' })
       // A steer withdrawn for a merge that then failed to send would be lost: it comes back into the draft.
       if (previous) {
         update(mergedSteer(previous, { text: draft.get().text, images: [] }).text)
         draft.set({ images: [...previous.images, ...draft.get().images] })
       }
+      // Recovery isn't a new message. Only an actual edit starts a new request identity.
+      if (attempt && unchanged) draft.set({ retry: attempt, requestId: attempt.requestId })
       setError(errorMessage(failure))
     } finally {
       draft.set({ sending: false })

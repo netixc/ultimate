@@ -26,8 +26,26 @@ const submissionReceipt = (host: ExtensionHost, pending: Pending) =>
 const receiptLookup = (host: ExtensionHost) => async (pending: Pending) =>
   !!(await submissionReceipt(host, pending))
 
+function uploadQueue(host: ExtensionHost) {
+  return host.resource('uploads.lock', () => {
+    const queue = { tail: Promise.resolve(), stopped: false }
+    host.onRelease(async () => {
+      queue.stopped = true
+      await queue.tail
+    })
+    host.onOpen(async () => {
+      queue.stopped = false
+    })
+    return queue
+  })
+}
+
 function locked<T>(host: ExtensionHost, work: (storage: UploadStorage) => Promise<T>): Promise<T> {
-  const queue = host.resource('uploads.lock', () => ({ tail: Promise.resolve() }))
+  const queue = uploadQueue(host)
+  if (queue.stopped)
+    return Promise.reject(
+      new UploadError('Uploads are paused while the host restarts. Retry shortly.'),
+    )
   const operation = queue.tail.then(() => work(new UploadStorage(host.home)))
   queue.tail = operation.then(
     () => {},
@@ -158,6 +176,8 @@ export const actions = {
 }
 
 export default (host: ExtensionHost) => {
+  // Process-scoped hooks precede facet cleanup and survive replacement while an old action is still running.
+  uploadQueue(host)
   host.onOpen(async () => {
     try {
       await locked(host, (storage) => storage.cleanup(host.chapter.name, receiptLookup(host)))

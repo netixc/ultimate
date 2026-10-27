@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, open as openFile, readFile, stat, symlink, writeFile } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterAll, expect, it } from 'vitest'
+import { afterAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { UploadStorage } from '../.ultimate/extensions/uploads/storage.ts'
@@ -115,4 +116,97 @@ it('transfers real bytes, admits normal and queued references, and keeps sent fi
     .join('\n')
   expect(recalled).toContain(uploadMarker(queued.id))
   expect(recalled).not.toContain('forged metadata')
+})
+
+it('drains in-flight storage on core release, denies late admission, and reopens uploads', async () => {
+  const root = await temp('ultimate-uploads-release-source-')
+  await linkDependencies(root)
+  await mkdir(join(root, 'web'))
+  await mkdir(join(root, 'extensions'))
+  await symlink(resolve('.ultimate/extensions/uploads'), join(root, 'extensions/uploads'))
+  await writeFile(
+    join(root, 'vite.config.ts'),
+    "export default { root: 'web', optimizeDeps: { noDiscovery: true }, server: { watch: null } }",
+  )
+  const home = await temp('ultimate-uploads-release-home-')
+  const server = await fauxServer({ ultimateRoot: root, home, userHome: home })
+  servers.push(server)
+  const probe = await openFile(join(home, 'probe'), 'wx', 0o600)
+  const prototype = Object.getPrototypeOf(probe) as FileHandle
+  await probe.close()
+  // oxlint-disable-next-line typescript/unbound-method -- The wrapper supplies each actual FileHandle with sync.call(this).
+  const sync = prototype.sync
+  const writing = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  const order: string[] = []
+  let first = true
+  const spy = vi.spyOn(prototype, 'sync').mockImplementation(async function (this: FileHandle) {
+    if (first) {
+      first = false
+      order.push('write-held')
+      writing.resolve()
+      await resume.promise
+      order.push('write-resumed')
+    }
+    return sync.call(this)
+  })
+  const upload = () =>
+    server.extensions.invoke(
+      'uploads',
+      'upload',
+      {
+        token: randomUUID(),
+        name: 'data.bin',
+        data: Buffer.from('bytes').toString('base64'),
+      },
+      new AbortController().signal,
+    )
+  const releaseStarted = Promise.withResolvers<void>()
+  const releaseExtensions = server.extensions.released.bind(server.extensions)
+  const releaseSpy = vi.spyOn(server.extensions, 'released').mockImplementation(async () => {
+    const done = releaseExtensions()
+    order.push('release-hooks-started')
+    releaseStarted.resolve()
+    await done
+  })
+  const inflight = upload()
+  let releasing: Promise<void> | undefined
+  try {
+    await writing.promise
+    order.push('release-called')
+    releasing = server.release().then(() => {
+      order.push('released')
+    })
+    await releaseStarted.promise
+    await expect(upload()).rejects.toThrow('Uploads are paused while the host restarts')
+    order.push('late-admission-denied')
+    expect(order).toEqual([
+      'write-held',
+      'release-called',
+      'release-hooks-started',
+      'late-admission-denied',
+    ])
+    resume.resolve()
+    await Promise.all([inflight, releasing])
+    expect(order).toEqual([
+      'write-held',
+      'release-called',
+      'release-hooks-started',
+      'late-admission-denied',
+      'write-resumed',
+      'released',
+    ])
+    expect((await new UploadStorage(home).index()).files).toHaveLength(1)
+    await server.go()
+    const uploaded = (await upload()) as UploadedFile
+    expect(await readFile(new UploadStorage(home).path(uploaded.id), 'utf8')).toBe('bytes')
+    expect((await new UploadStorage(home).index()).files).toHaveLength(2)
+  } finally {
+    resume.resolve()
+    // An earlier assertion may have failed; settle the released operation before removing its filesystem spy.
+    await inflight.catch(() => {})
+    await releasing
+    releaseSpy.mockRestore()
+    spy.mockRestore()
+  }
 })
