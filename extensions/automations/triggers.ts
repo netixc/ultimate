@@ -7,6 +7,7 @@ import type { EventRecord } from '../../shared/events.ts'
 import { ContextUsageDoc } from '../conversations/api.ts'
 import type { ContextUsage } from '../conversations/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { rearmBelow } from './condition.ts'
 import { describeSchedule } from './schedule.ts'
 import type { Automations as Ledger } from './server.ts'
 import type { Automation, TriggerEvent } from './types.ts'
@@ -119,7 +120,7 @@ export function triggers(
     if (usage.percent === undefined) return
     const condition = a.condition
     condition.value = usage.percent
-    if (usage.percent < condition.above - 10) condition.armed = true
+    if (usage.percent < rearmBelow(condition.above)) condition.armed = true
     const now = Date.now()
     const paused = condition.idleFor ? now - (condition.inputAt ?? a.createdAt) : undefined
     if (
