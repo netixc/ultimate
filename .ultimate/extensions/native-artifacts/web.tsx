@@ -1,42 +1,31 @@
-import {
-  ArrowLeftIcon,
-  FileCodeIcon,
-  MessageSquareIcon,
-  MousePointer2Icon,
-  RefreshCwIcon,
-  TypeIcon,
-} from 'lucide-react'
+import { FileCodeIcon, HistoryIcon, InfoIcon, MessageSquareIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   Card,
-  Conversation,
-  Dock,
-  Header,
   StatusLine,
-  cn,
   defineWebExtension,
   useAction,
   useConversations,
   useExtensionUiState,
   useUltimate,
-  useViewport,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import type { Artifact, ArtifactAnchor } from '../artifacts/types.ts'
-import { FeedbackPanel, conversationName } from './feedback.tsx'
-import type { CaptureMode, NativeDocument, TargetStatus } from './types.ts'
+import { FeedbackComposer, FeedbackHistory, NoteEditor, conversationName } from './feedback.tsx'
+import type { NativeDocument, TargetStatus } from './types.ts'
 import { List, Read, anyDrafts, hasDraft, useReviewDraft } from './ui.tsx'
 import { ArtifactFrame } from './viewer.tsx'
 
-// Retain the displayed revision across surface switches while its tab-local notes are still pending.
+// Keep both revisions across surface switches: notes refer to the displayed one, polls use the latest fetched one.
 const displayed = new Map<string, NativeDocument>()
 const fetched = new Map<string, NativeDocument>()
 const short = (hash: string) => hash.slice(0, 8)
 
 function PublishedArtifact({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const [selected, select] = useExtensionUiState<string | null>('selected', null)
+  const [, select] = useExtensionUiState<string | null>('selected', null)
   const { showSurface } = useUltimate()
   const conversations = useConversations()
   const value = call.details
@@ -45,8 +34,7 @@ function PublishedArtifact({ call, core }: { call: ToolCallView; core: ReactNode
     <Card className="overflow-hidden" data-published-artifact={value.id}>
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <FileCodeIcon className="size-3.5 text-brand" />
-        HTML artifact
-        <span className="ml-auto">{short(value.contentHash)}</span>
+        HTML artifact<span className="ml-auto">{short(value.contentHash)}</span>
       </header>
       <div className="space-y-2 px-3 py-3">
         <p className="text-[13px] font-medium">{value.title}</p>
@@ -55,7 +43,7 @@ function PublishedArtifact({ call, core }: { call: ToolCallView; core: ReactNode
         </p>
         <Button
           onClick={() => {
-            if (selected !== value.id) select(value.id)
+            select(value.id)
             showSurface('native-artifacts')
           }}
           size="sm"
@@ -140,7 +128,7 @@ function Review({ artifact }: { artifact: Artifact }) {
   const { refetch } = result
   useEffect(() => {
     const timer = window.setInterval(() => {
-      // useAction renders action errors and resolves undefined, including aborted polls.
+      // useAction reports errors in state and resolves undefined, including aborted polls.
       // oxlint-disable-next-line typescript/no-floating-promises
       if (!window.document.hidden) void refetch()
     }, 2000)
@@ -152,7 +140,7 @@ function Review({ artifact }: { artifact: Artifact }) {
         {result.error ? (
           <div className="space-y-3 text-center">
             <p className="text-error">Couldn’t open artifact: {result.error.message}</p>
-            <Button onClick={() => void result.refetch()} size="sm" variant="outline">
+            <Button onClick={() => result.refetch()} size="sm" variant="outline">
               Retry
             </Button>
           </div>
@@ -190,17 +178,19 @@ function LoadedReview({
 }) {
   const artifact = document.artifact
   const [draft, update] = useReviewDraft(artifact)
-  const viewport = useViewport()
-  const phone = viewport !== 'desktop'
-  const [mobileFeedback, setMobileFeedback] = useExtensionUiState('feedbackOpen', false)
-  const [mode, setMode] = useState<CaptureMode>('view')
-  const [capture, setCapture] = useState(0)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [interacting, setInteracting] = useState(false)
   const [statuses, setStatuses] = useState<TargetStatus[]>([])
   const [frameError, setFrameError] = useState<string>()
   const conversations = useConversations()
+  const { switchConversation, showSurface } = useUltimate()
   const pending = hasDraft(draft)
+  const modalOpen = noteOpen || feedbackOpen || historyOpen || detailsOpen
+  const blocked = pending || modalOpen || interacting
   const updateReady = !!latest && latest.artifact.contentHash !== artifact.contentHash
-  const blocked = pending || mode !== 'view'
   const anchors = useMemo(
     () => [
       ...draft.notes.flatMap((note) => (note.anchor ? [note.anchor] : [])),
@@ -220,207 +210,189 @@ function LoadedReview({
     onDocument(latest)
   }
   useEffect(() => {
-    // Ignore regenerated bridge channels for identical content; refresh only coherent, newer snapshots.
+    // The default picker stays active; only an actual gesture or unfinished feedback defers a newer revision.
     if (updateReady && !blocked) apply()
   })
   const target = (anchor: ArtifactAnchor) => {
-    update((current) => ({ ...current, anchor, editor: '' }))
-    setMode('view')
+    update((current) => (current.anchor ? current : { ...current, anchor, editor: '' }))
     setFrameError(undefined)
-    if (phone) setMobileFeedback(true)
+    setNoteOpen(true)
   }
   const sourceError = latest ? latest.sourceError : document.sourceError
+  const count = draft.notes.length + (draft.anchor ? 1 : 0)
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-artifact-review={artifact.id}>
-      <div className="space-y-2 border-b border-border/70 px-3 py-2.5">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <h1 className="break-words text-[14px] font-medium">{artifact.title}</h1>
-          </div>
-          {phone && (
-            <Button onClick={() => setMobileFeedback(!mobileFeedback)} size="sm" variant="outline">
-              {mobileFeedback ? <ArrowLeftIcon /> : <MessageSquareIcon />}
-              {mobileFeedback
-                ? 'Artifact'
-                : `Feedback${draft.notes.length ? ` · ${draft.notes.length}` : pending ? ' · Draft' : ''}`}
-            </Button>
-          )}
-        </div>
-        <div className="space-y-1 font-mono text-[11px] text-muted-foreground">
-          <p className="flex min-w-0 items-baseline gap-1">
-            <span className="shrink-0">Made by</span>
-            <span className="truncate">
-              {conversations.find((item) => item.id === artifact.ownerConversation)?.title ??
-                'conversation'}
-            </span>
-            <span className="shrink-0">
-              #{artifact.ownerConversation} · rev {short(artifact.contentHash)}
-            </span>
-          </p>
-          <p className="flex min-w-0 items-baseline gap-1">
-            <span className="shrink-0">Feedback to</span>
-            <span className="truncate">
-              {conversations.find((item) => item.id === Number(draft.recipient))?.title ??
-                'conversation'}
-            </span>
-            <span className="shrink-0">
-              {Number.isSafeInteger(Number(draft.recipient)) && Number(draft.recipient) > 0
-                ? `#${draft.recipient}`
-                : 'not set'}
-            </span>
-          </p>
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          Static review · scripts and network access blocked.
-        </p>
-        {sourceError && (
-          <p className="text-[12px] text-warning" role="status">
-            Showing retained snapshot: {sourceError}
-          </p>
-        )}
-        {readError && (
-          <p className="text-[12px] text-warning" role="status">
-            Refresh failed: {readError}{' '}
-            <button className="cursor-pointer underline" onClick={retry} type="button">
-              Retry
-            </button>
-          </p>
-        )}
-        {updateReady && (
-          <div className="flex flex-wrap items-center gap-2 text-[12px] text-warning" role="status">
-            <RefreshCwIcon className="size-3" />
-            Update ready
-            {blocked ? (
-              ' · finish or remove drafts and exit annotation mode to refresh.'
-            ) : (
-              <Button onClick={apply} size="xs" variant="outline">
+      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/70 px-2">
+        <FileCodeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <h1 className="min-w-0 flex-1 truncate text-[12px]" title={artifact.title}>
+          {artifact.title}
+        </h1>
+        <Button onClick={() => setFeedbackOpen(true)} size="sm" variant="ghost">
+          <MessageSquareIcon />
+          Feedback{count ? ` · ${count}` : pending ? ' · Draft' : ''}
+        </Button>
+        <Button
+          aria-label="Feedback history"
+          title="Feedback history"
+          onClick={() => setHistoryOpen(true)}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <HistoryIcon />
+        </Button>
+        <Button
+          aria-label="Artifact details"
+          title="Artifact details"
+          onClick={() => setDetailsOpen(true)}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <InfoIcon />
+        </Button>
+      </header>
+      <div className="relative min-h-0 flex-1" aria-label="Artifact preview">
+        <ArtifactFrame
+          document={document}
+          mode={modalOpen || draft.anchor ? 'view' : 'annotate'}
+          anchors={anchors}
+          onTarget={target}
+          onStatuses={setStatuses}
+          onReady={() => setFrameError(undefined)}
+          onError={setFrameError}
+          onInteracting={setInteracting}
+        />
+        {(sourceError || readError || frameError || updateReady) && (
+          <div
+            className="absolute bottom-3 left-3 right-3 mx-auto w-fit max-w-[calc(100%-1.5rem)] rounded-md border border-border/70 bg-background px-3 py-2 text-[12px] shadow-sm"
+            role="status"
+          >
+            {frameError ??
+              (sourceError
+                ? `Showing retained snapshot: ${sourceError}`
+                : readError
+                  ? `Refresh failed: ${readError}`
+                  : 'Update ready · finish feedback to refresh.')}
+            {readError && (
+              <button className="ml-2 cursor-pointer underline" onClick={retry} type="button">
+                Retry
+              </button>
+            )}
+            {updateReady && !blocked && (
+              <Button onClick={apply} size="xs" variant="ghost">
+                <RefreshCwIcon />
                 Apply update
               </Button>
             )}
           </div>
         )}
       </div>
-      <div className="flex min-h-0 flex-1">
-        <section
-          aria-label="Artifact preview"
-          className={cn(
-            'flex min-h-0 min-w-0 flex-1 flex-col',
-            phone && mobileFeedback && 'hidden',
-          )}
+      <Dialog open={noteOpen && !!draft.anchor} onOpenChange={setNoteOpen}>
+        <DialogContent
+          className="max-h-[85dvh] overflow-y-auto p-4 sm:max-w-sm"
+          aria-describedby="native-artifacts-note-description"
         >
-          <div className="flex flex-wrap items-center gap-1 border-b border-border/70 px-2 py-1.5">
-            <Button
-              aria-pressed={mode === 'element'}
-              disabled={!!draft.anchor}
-              onClick={() => {
-                setMode(mode === 'element' ? 'view' : 'element')
-                setFrameError(undefined)
-              }}
-              size="sm"
-              variant={mode === 'element' ? 'secondary' : 'ghost'}
-            >
-              <MousePointer2Icon />
-              Pick element
-            </Button>
-            <Button
-              aria-pressed={mode === 'text'}
-              disabled={!!draft.anchor}
-              onClick={() => {
-                setMode(mode === 'text' ? 'view' : 'text')
-                setFrameError(undefined)
-              }}
-              size="sm"
-              variant={mode === 'text' ? 'secondary' : 'ghost'}
-            >
-              <TypeIcon />
-              Select text
-            </Button>
-            {mode !== 'view' && (
-              <Button
-                onClick={() => {
-                  setMode('view')
-                  setFrameError(undefined)
-                }}
-                size="sm"
-                variant="ghost"
-              >
-                Done
-              </Button>
-            )}
-          </div>
-          {mode === 'element' && (
-            <p
-              className="border-b border-border/70 px-3 py-2 text-[12px] text-muted-foreground"
-              role="status"
-            >
-              Select an element in the artifact. Links and controls won’t activate.
-            </p>
-          )}
-          {mode === 'text' && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-3 py-2">
-              <p className="min-w-0 flex-1 text-[12px] text-muted-foreground">
-                Select text naturally, then capture it. On phones, use long-press and the selection
-                handles.
-              </p>
-              <Button
-                onPointerDown={(event) => event.preventDefault()}
-                onClick={() => setCapture((current) => current + 1)}
-                size="sm"
-                variant="outline"
-              >
-                Note selected text
-              </Button>
-            </div>
-          )}
-          {draft.anchor && phone && (
-            <Button
-              className="m-2"
-              onClick={() => setMobileFeedback(true)}
-              size="sm"
-              variant="outline"
-            >
-              Finish selected note
-            </Button>
-          )}
-          {frameError && (
-            <p className="border-b border-border/70 px-3 py-2 text-[12px] text-error" role="alert">
-              {frameError}
-            </p>
-          )}
-          <div className="min-h-0 flex-1">
-            <ArtifactFrame
-              anchors={anchors}
-              capture={capture}
-              document={document}
-              mode={mode}
-              onError={setFrameError}
-              onReady={() => setFrameError(undefined)}
-              onStatuses={setStatuses}
-              onTarget={target}
-            />
-          </div>
-        </section>
-        <aside
-          aria-label="Artifact feedback"
-          className={cn(
-            'flex min-h-0 flex-col border-border/70 bg-background',
-            phone ? (mobileFeedback ? 'w-full' : 'hidden') : 'w-[21rem] shrink-0 border-l',
-          )}
+          <DialogTitle className="pr-6 text-[14px]">Add note</DialogTitle>
+          <DialogDescription className="sr-only" id="native-artifacts-note-description">
+            {draft.anchor?.kind === 'text' ? 'Selected text' : 'Selected element'}. Closing keeps
+            this draft in your feedback.
+          </DialogDescription>
+          <NoteEditor draft={draft} update={update} onAdded={() => setNoteOpen(false)} />
+        </DialogContent>
+      </Dialog>
+      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+        <DialogContent
+          className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
+          aria-describedby="native-artifacts-feedback-description"
         >
-          {!phone && (
-            <div className="flex h-10 shrink-0 items-center border-b border-border/70 px-3 font-mono text-[11px] text-muted-foreground">
-              Feedback
-            </div>
-          )}
-          <FeedbackPanel
+          <div className="border-b border-border/70 px-3 py-4">
+            <DialogTitle className="pr-6 text-[14px]">Feedback</DialogTitle>
+            <DialogDescription className="sr-only" id="native-artifacts-feedback-description">
+              Review notes, add general feedback or reference images, then send to the maker.
+            </DialogDescription>
+          </div>
+          <FeedbackComposer
             artifact={artifact}
             draft={draft}
-            onDraftAdded={() => setMode('view')}
-            statuses={statuses}
             update={update}
+            statuses={statuses}
+            onContinueNote={() => {
+              setFeedbackOpen(false)
+              setNoteOpen(true)
+            }}
           />
-        </aside>
-      </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent
+          className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
+          aria-describedby="native-artifacts-history-description"
+        >
+          <div className="border-b border-border/70 px-3 py-4">
+            <DialogTitle className="pr-6 text-[14px]">Feedback history</DialogTitle>
+            <DialogDescription className="sr-only" id="native-artifacts-history-description">
+              Saved feedback and delivery receipts for this artifact.
+            </DialogDescription>
+          </div>
+          <div className="min-h-0 overflow-y-auto">
+            {historyOpen && <FeedbackHistory artifact={artifact} />}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent
+          className="max-h-[85dvh] overflow-y-auto p-4 sm:max-w-md"
+          aria-describedby="native-artifacts-details-description"
+        >
+          <DialogTitle className="pr-6 text-[14px]">Artifact details</DialogTitle>
+          <DialogDescription className="text-[12px]" id="native-artifacts-details-description">
+            Click an element or drag over text to add a note. On phones, use native text-selection
+            handles.
+          </DialogDescription>
+          <dl className="space-y-3 text-[12px]">
+            <div>
+              <dt className="text-muted-foreground">Made by</dt>
+              <dd>
+                <button
+                  className="cursor-pointer text-left hover:underline"
+                  onClick={() => {
+                    switchConversation(artifact.ownerConversation)
+                    showSurface('agent')
+                  }}
+                  type="button"
+                >
+                  {conversationName(artifact.ownerConversation, conversations)}
+                </button>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Original revision</dt>
+              <dd className="break-all font-mono text-[11px]">{artifact.contentHash}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Local file</dt>
+              <dd className="break-words font-mono text-[11px]">{artifact.source.path}</dd>
+            </div>
+          </dl>
+          <label className="space-y-1.5 text-[12px] text-muted-foreground">
+            Feedback to conversation
+            <input
+              aria-label="Feedback destination"
+              className="mt-1 w-full rounded-md border border-border/70 bg-background px-2 py-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              inputMode="numeric"
+              value={draft.recipient}
+              disabled={!!draft.request}
+              onChange={(event) =>
+                update((current) => ({ ...current, recipient: event.target.value }))
+              }
+            />
+          </label>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Static local HTML. Authored scripts and network access are blocked. Concluded or
+            unavailable destinations route through @ultimate. Drafts stay in this tab, not on disk;
+            send before reloading.
+          </p>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -428,12 +400,10 @@ function LoadedReview({
 function Artifacts() {
   const artifacts = useAction(List, null, { onError: () => {} })
   const [selected, select] = useExtensionUiState<string | null>('selected', null)
-  const viewport = useViewport()
-  const [conversationOpen, setConversationOpen] = useState(false)
   const { refetch } = artifacts
   useEffect(() => {
     const timer = window.setInterval(() => {
-      // useAction renders action errors and resolves undefined, including aborted polls.
+      // useAction reports errors in state and resolves undefined, including aborted polls.
       // oxlint-disable-next-line typescript/no-floating-promises
       if (!document.hidden) void refetch()
     }, 2000)
@@ -442,15 +412,13 @@ function Artifacts() {
   const active = artifacts.data?.find((artifact) => artifact.id === selected) ?? artifacts.data?.[0]
   return (
     <>
-      <Header>
-        <FileCodeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="text-[13px]">Artifacts</span>
-        {artifacts.data && artifacts.data.length > 1 && (
+      {artifacts.data && artifacts.data.length > 1 && (
+        <nav className="border-b border-border/70 p-2">
           <select
             aria-label="Choose artifact"
-            className="min-w-0 max-w-56 rounded border border-border/70 bg-background px-2 py-1 text-[12px]"
-            onChange={(event) => select(event.target.value)}
+            className="max-w-full rounded border border-border/70 bg-background px-2 py-1 text-[12px]"
             value={active?.id}
+            onChange={(event) => select(event.target.value)}
           >
             {artifacts.data.map((artifact) => (
               <option key={artifact.id} value={artifact.id}>
@@ -458,51 +426,33 @@ function Artifacts() {
               </option>
             ))}
           </select>
-        )}
-        {viewport === 'desktop' && (
-          <Button
-            aria-pressed={conversationOpen}
-            onClick={() => setConversationOpen(!conversationOpen)}
-            size="xs"
-            variant="ghost"
-          >
-            Conversation
-          </Button>
-        )}
-      </Header>
-      <div className="flex min-h-0 flex-1">
-        {active ? (
-          <Review artifact={active} key={active.id} />
-        ) : (
-          <div className="flex min-w-0 flex-1 items-center justify-center p-6">
-            <div className="max-w-sm space-y-3 text-center">
-              <FileCodeIcon className="mx-auto size-6 text-muted-foreground" />
-              <h1 className="text-[14px] font-medium">
-                {artifacts.loading
-                  ? 'Loading artifacts…'
-                  : artifacts.error
-                    ? 'Artifacts unavailable'
-                    : 'No HTML artifacts yet'}
-              </h1>
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
-                {artifacts.error
-                  ? artifacts.error.message
-                  : 'Ask the maker to publish a local HTML file. Review it here, point to an element or text, and send feedback to its maker.'}
-              </p>
-              {artifacts.error && (
-                <Button onClick={() => void artifacts.refetch()} size="sm" variant="outline">
-                  Retry
-                </Button>
-              )}
-            </div>
+        </nav>
+      )}
+      {active ? (
+        <Review artifact={active} key={active.id} />
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center justify-center p-6">
+          <div className="max-w-sm space-y-3 text-center">
+            <FileCodeIcon className="mx-auto size-6 text-muted-foreground" />
+            <h1 className="text-[14px] font-medium">
+              {artifacts.loading
+                ? 'Loading artifacts…'
+                : artifacts.error
+                  ? 'Artifacts unavailable'
+                  : 'No HTML artifacts yet'}
+            </h1>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              {artifacts.error?.message ??
+                'Ask the maker to publish a local HTML file. Click an element or drag over text to add feedback.'}
+            </p>
+            {artifacts.error && (
+              <Button onClick={() => artifacts.refetch()} size="sm" variant="outline">
+                Retry
+              </Button>
+            )}
           </div>
-        )}
-        {viewport === 'desktop' && conversationOpen && (
-          <Dock title="conversation">
-            <Conversation variant="dock" />
-          </Dock>
-        )}
-      </div>
+        </div>
+      )}
       <StatusLine />
     </>
   )

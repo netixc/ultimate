@@ -14,4 +14,4 @@ export type NativeReadResult =
   | { unchanged: true; artifact: Artifact; sourceError?: string }
 
 export type TargetStatus = 'same' | 'changed' | 'missing'
-export type CaptureMode = 'view' | 'element' | 'text'
+export type CaptureMode = 'view' | 'annotate'

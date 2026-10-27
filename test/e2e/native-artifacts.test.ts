@@ -66,8 +66,8 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       import {createRoot} from 'react-dom/client';
       import {ArtifactFrame} from '/.ultimate/extensions/native-artifacts/viewer.tsx';
       const root = createRoot(document.getElementById('root'));
-      window.received = []; window.statuses = []; window.errors = []; window.ready = 0;
-      window.props = {mode:'element',capture:0,anchors:[],onTarget:a=>window.received.push(a),onStatuses:s=>window.statuses.push(s),onError:e=>window.errors.push(e),onReady:()=>window.ready++};
+      window.received = []; window.statuses = []; window.errors = []; window.interactions = []; window.ready = 0;
+      window.props = {mode:'annotate',anchors:[],onTarget:a=>window.received.push(a),onStatuses:s=>window.statuses.push(s),onError:e=>window.errors.push(e),onInteracting:a=>window.interactions.push(a),onReady:()=>window.ready++};
       window.install = (doc, patch={}) => { Object.assign(window.props,patch); if(doc)window.props.document=doc; root.render(React.createElement(ArtifactFrame,window.props)); };
     `
           return undefined
@@ -119,7 +119,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
     expect(await child.locator('body').evaluate((body) => body.innerHTML)).toBe(originalMarkup)
     await link.hover()
     expect(await link.getAttribute('style')).toBe(originalStyle)
-    await install(null, { mode: 'element' })
+    await install(null, { mode: 'annotate' })
     await link.hover()
     await child.locator('button').hover()
     expect(await link.getAttribute('style')).toBe(originalStyle)
@@ -134,21 +134,27 @@ it('captures element and cross-node text targets, validates stale boundaries, an
     const element = (await page.evaluate(() => (window as any).received[0])) as ArtifactAnchor
     expect(element).toMatchObject({ kind: 'element', text: 'A static link' })
     expect(page.url()).toBe(origin + '/native-test')
-    await install(null, { mode: 'text' })
-    // Selection remains native; only the external Capture counter submits it.
-    await child
+    // A real native drag captures once at release; its following click cannot replace it with an element.
+    const points = await child
       .locator('p')
       .first()
       .evaluate((p) => {
-        const range = document.createRange()
-        range.setStart(p.firstChild!, 3)
-        range.setEnd(p.lastChild!, 3)
-        const selection = getSelection()!
-        selection.removeAllRanges()
-        selection.addRange(range)
+        const point = (node: Node, offset: number) => {
+          const range = document.createRange()
+          range.setStart(node, offset)
+          range.collapse(true)
+          const rect = range.getBoundingClientRect()
+          return { x: rect.x, y: rect.y + rect.height / 2 }
+        }
+        return { start: point(p.firstChild!, 3), end: point(p.lastChild!, 3) }
       })
+    const box = (await iframe.boundingBox())!
+    await page.mouse.move(box.x + points.start.x, box.y + points.start.y)
+    await page.mouse.down()
+    await page.mouse.move(box.x + points.end.x, box.y + points.end.y, { steps: 8 })
     expect(await page.evaluate(() => (window as any).received.length)).toBe(1)
-    await install(null, { capture: 1 })
+    expect(await page.evaluate(() => (window as any).interactions.at(-1))).toBe(true)
+    await page.mouse.up()
     await until(async () => await page.evaluate(() => (window as any).received.length === 2))
     const text = (await page.evaluate(() => (window as any).received[1])) as ArtifactAnchor
     expect(text).toMatchObject({
@@ -176,6 +182,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
           () => JSON.stringify((window as any).statuses.at(-1)) === '["same","changed","missing"]',
         ),
     )
+    expect(await page.evaluate(() => (window as any).interactions.at(-1))).toBe(false)
     const current = (await page.evaluate(() => (window as any).props.document)) as NativeDocument
     // A same-channel target from another window/origin cannot reach the parent callback.
     await page.evaluate(async (channel) => {
@@ -215,25 +222,10 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       })
     }, current.channel)
     const frame = page.frames().find((f) => f !== page.mainFrame())!
+    const beforePayloads = await page.evaluate(() => (window as any).interactions.length)
     await frame.evaluate(
       ({ channel, parentOrigin }) => {
-        // Correct source but wrong origin: must not switch into element capture mode.
-        dispatchEvent(
-          new MessageEvent('message', {
-            source: parent,
-            origin: 'https://wrong.example',
-            data: { type: 'configure', channel, mode: 'element', anchors: [] },
-          }),
-        )
-        // Correct origin but wrong source is rejected independently.
-        dispatchEvent(
-          new MessageEvent('message', {
-            source: window,
-            origin: parentOrigin,
-            data: { type: 'configure', channel, mode: 'element', anchors: [] },
-          }),
-        )
-        // A malformed frame payload and wrong-channel payload must be ignored by the host.
+        // Test these while the host accepts annotation targets, so mode cannot mask a decoder failure.
         parent.postMessage(
           {
             type: 'target',
@@ -250,15 +242,40 @@ it('captures element and cross-node text targets, validates stale boundaries, an
           },
           parentOrigin,
         )
+        parent.postMessage({ type: 'interaction', channel, active: false }, parentOrigin)
       },
       { channel: current.channel, parentOrigin: origin },
     )
-    await child.locator('h1').click()
-    await install(null, { capture: 2 })
-    await until(async () => await page.evaluate(() => (window as any).errors.length === 1))
+    await until(
+      async () => (await page.evaluate(() => (window as any).interactions.length)) > beforePayloads,
+    )
     expect(await page.evaluate(() => (window as any).received.length)).toBe(2)
-    expect(await page.getByRole('status').textContent()).toContain('Select some text')
-    await install(null, { mode: 'element' })
+    await install(null, { mode: 'view' })
+    await frame.evaluate(
+      ({ channel, parentOrigin }) => {
+        // Independently reject the wrong origin and wrong source in parent-to-child commands.
+        dispatchEvent(
+          new MessageEvent('message', {
+            source: parent,
+            origin: 'https://wrong.example',
+            data: { type: 'configure', channel, mode: 'annotate', anchors: [] },
+          }),
+        )
+        dispatchEvent(
+          new MessageEvent('message', {
+            source: window,
+            origin: parentOrigin,
+            data: { type: 'configure', channel, mode: 'annotate', anchors: [] },
+          }),
+        )
+      },
+      { channel: current.channel, parentOrigin: origin },
+    )
+    await child.locator('h1').hover()
+    expect(await child.locator('h1').getAttribute('style')).toBeNull()
+    await child.locator('h1').click()
+    expect(await page.evaluate(() => (window as any).received.length)).toBe(2)
+    await install(null, { mode: 'annotate' })
     await child.locator('button').click()
     await until(async () => await page.evaluate(() => (window as any).received.length === 3))
     await child.locator('img').click()
@@ -271,7 +288,6 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       kind: 'element',
       text: '',
     })
-    await install(null, { mode: 'text' })
     await child.locator('#paragraph').click({ clickCount: 3 })
     const nativeSelection = await child.locator('#paragraph').evaluate(() => {
       const range = getSelection()!.getRangeAt(0)
@@ -286,13 +302,39 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       endType: 1,
       endOffset: 0,
     })
-    await install(null, { capture: 3 })
-    await until(async () => await page.evaluate(() => (window as any).received.length === 5))
-    expect(await page.evaluate(() => (window as any).received[4])).toMatchObject({
+    await until(
+      async () =>
+        await page.evaluate(
+          () => (window as any).received.at(-1)?.text === 'Paragraph text with a natural boundary.',
+        ),
+    )
+    expect(await page.evaluate(() => (window as any).received.at(-1))).toMatchObject({
       kind: 'text',
       text: nativeSelection.quote,
       end: { offset: 0 },
     })
+    const beforeWhitespace = await page.evaluate(() => ({
+      targets: (window as any).received.length,
+      interactions: (window as any).interactions.length,
+    }))
+    await child.locator('#paragraph').evaluate((p) => {
+      document.dispatchEvent(new PointerEvent('pointerdown'))
+      const range = document.createRange()
+      range.setStart(p.firstChild!, 9)
+      range.setEnd(p.firstChild!, 10)
+      getSelection()!.removeAllRanges()
+      getSelection()!.addRange(range)
+      document.dispatchEvent(new PointerEvent('pointerup'))
+      p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await until(
+      async () =>
+        (await page.evaluate(() => (window as any).interactions.length)) >=
+        beforeWhitespace.interactions + 2,
+    )
+    expect(await page.evaluate(() => (window as any).received.length)).toBe(
+      beforeWhitespace.targets,
+    )
     expect(errors).toEqual([])
   } finally {
     await browser.close()

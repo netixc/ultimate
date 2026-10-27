@@ -6,13 +6,12 @@ import type { CaptureMode, NativeDocument, TargetStatus } from './types.ts'
 export type ArtifactFrameProps = {
   document: NativeDocument
   mode: CaptureMode
-  /** Changing this counter explicitly captures the current native selection. */
-  capture: number
   anchors: ArtifactAnchor[]
   onTarget(anchor: ArtifactAnchor): void
   onStatuses(statuses: TargetStatus[]): void
   onReady?(): void
   onError?(message: string): void
+  onInteracting?(active: boolean): void
 }
 
 /** The artifact stays in an opaque-origin frame; messages can report targets, never invoke server actions. */
@@ -22,7 +21,6 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
   latest.current = props
   const [readyChannel, setReadyChannel] = useState('')
   const [notice, setNotice] = useState('Loading artifact…')
-  const lastCapture = useRef(props.capture)
   const channel = props.document.channel
   const post = useCallback(
     (message: object) => {
@@ -34,7 +32,7 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
   useEffect(() => {
     setNotice('Loading artifact…')
     setReadyChannel('')
-    lastCapture.current = latest.current.capture
+    latest.current.onInteracting?.(false)
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.origin !== 'null') return
       const message = decodeFrameMessage(event.data, channel)
@@ -45,13 +43,11 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
         setNotice('Artifact ready.')
         current.onReady?.()
       } else if (message.type === 'target') {
-        if (
-          (message.anchor.kind === 'element' && current.mode !== 'element') ||
-          (message.anchor.kind === 'text' && current.mode !== 'text')
-        )
-          return
+        if (current.mode !== 'annotate') return
         setNotice(message.anchor.kind === 'text' ? 'Text selection captured.' : 'Element captured.')
         current.onTarget(message.anchor)
+      } else if (message.type === 'interaction') {
+        current.onInteracting?.(message.active && current.mode === 'annotate')
       } else if (message.type === 'statuses') {
         if (message.statuses.length === current.anchors.length) current.onStatuses(message.statuses)
       } else {
@@ -60,17 +56,16 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
       }
     }
     window.addEventListener('message', receive)
-    return () => window.removeEventListener('message', receive)
+    return () => {
+      window.removeEventListener('message', receive)
+      latest.current.onInteracting?.(false)
+    }
   }, [channel])
   useEffect(() => {
+    if (props.mode !== 'annotate') latest.current.onInteracting?.(false)
     if (readyChannel === channel)
       post({ type: 'configure', mode: props.mode, anchors: props.anchors.slice(0, 200) })
   }, [readyChannel, channel, props.mode, props.anchors, post])
-  useEffect(() => {
-    if (lastCapture.current === props.capture) return
-    lastCapture.current = props.capture
-    if (readyChannel === channel && props.mode === 'text') post({ type: 'capture' })
-  }, [props.capture, props.mode, readyChannel, channel, post])
   return (
     <div className="flex h-full min-h-0 flex-col">
       <iframe

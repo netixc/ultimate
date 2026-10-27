@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { posix } from 'node:path'
 import { html as htmlSpec, parse, serialize } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
+import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_HTML_BYTES } from '../artifacts/types.ts'
 import type { ArtifactSnapshot } from '../artifacts/types.ts'
 import { bridgeSource } from './bridge.ts'
 
@@ -39,28 +40,22 @@ export function buildDocument(
   const origin = new URL(parentOrigin)
   if (!['http:', 'https:'].includes(origin.protocol) || origin.origin !== parentOrigin)
     throw new Error('The artifact bridge requires an exact HTTP parent origin.')
-  if (Buffer.byteLength(snapshot.html) > 5 * 1024 * 1024)
-    throw new Error('Artifact HTML exceeds 5 MiB.')
+  const htmlBytes = Buffer.byteLength(snapshot.html)
+  if (htmlBytes > MAX_ARTIFACT_HTML_BYTES) throw new Error('Artifact HTML exceeds 2 MiB.')
   const channel = randomBytes(24).toString('hex')
   const nonce = randomBytes(24).toString('base64')
   const retained = new Set(snapshot.artifact.source.assets)
   const assets = new Map<string, { mime: string; bytes: Buffer }>()
-  let total = 0
+  let total = htmlBytes
   for (const asset of snapshot.assets) {
-    if (
-      !retained.has(asset.path) ||
-      !assetMimes.has(asset.mime) ||
-      asset.base64.length > 7 * 1024 * 1024
-    )
-      continue
+    if (!retained.has(asset.path) || !assetMimes.has(asset.mime)) continue
+    if (asset.base64.length > Math.ceil(MAX_ARTIFACT_BYTES / 3) * 4)
+      throw new Error(`Artifact asset "${asset.path}" exceeds the 10 MiB bundle limit.`)
     const bytes = Buffer.from(asset.base64, 'base64')
-    if (
-      bytes.toString('base64') !== asset.base64 ||
-      bytes.length > 5 * 1024 * 1024 ||
-      total + bytes.length > 20 * 1024 * 1024
-    )
-      continue
+    if (bytes.toString('base64') !== asset.base64)
+      throw new Error(`Artifact asset "${asset.path}" has invalid base64 data.`)
     total += bytes.length
+    if (total > MAX_ARTIFACT_BYTES) throw new Error('Artifact bundle exceeds 10 MiB.')
     assets.set(asset.path, { mime: asset.mime, bytes })
   }
   const resolve = (value: string, from: string) => {
@@ -92,12 +87,14 @@ export function buildDocument(
     )
       return ''
     const url = `data:${asset.mime};base64,${asset.bytes.toString('base64')}`
-    if (embeddedBytes + url.length > maxEmbeddedBytes) return ''
+    if (embeddedBytes + url.length > maxEmbeddedBytes)
+      throw new Error('Artifact embedded resources exceed 25 MiB after data URL expansion.')
     embeddedBytes += url.length
     return url
   }
   const css = (source: string, from: string) => {
-    if (embeddedBytes + source.length > maxEmbeddedBytes) return ''
+    if (embeddedBytes + source.length > maxEmbeddedBytes)
+      throw new Error('Artifact embedded resources exceed 25 MiB after data URL expansion.')
     embeddedBytes += source.length
     // CSS escapes can disguise URL tokens and imports. Reject those sheets instead of guessing their grammar.
     // CSP independently denies external styles, imports and every non-data resource, including malformed CSS.

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Card,
+  ActionError,
   api,
   errorMessage,
   formatTime,
@@ -17,6 +18,7 @@ import type {
   FeedbackInput,
   ReferenceImage,
 } from '../artifacts/types.ts'
+import { FEEDBACK_IMAGE_MAX_BYTES, FEEDBACK_MAX_JSON_BYTES } from '../artifacts/types.ts'
 import type { TargetStatus } from './types.ts'
 import { Feedback, FeedbackList, FeedbackRead } from './ui.tsx'
 import type { ReviewDraft } from './ui.tsx'
@@ -145,28 +147,26 @@ function ReceiptDetails({ bundle }: { bundle: FeedbackSummary }) {
   )
 }
 
-export function FeedbackPanel({
+export function FeedbackComposer({
   artifact,
   draft,
   update,
   statuses,
-  onDraftAdded,
+  onContinueNote,
 }: {
   artifact: Artifact
   draft: ReviewDraft
   update: (change: (current: ReviewDraft) => ReviewDraft) => void
   statuses: TargetStatus[]
-  onDraftAdded: () => void
+  onContinueNote: () => void
 }) {
   const conversations = useConversations()
-  const history = useAction(FeedbackList, { artifactId: artifact.id }, { onError: () => {} })
   const [sending, setSending] = useState(false)
   const readingImages = !!draft.readingImages
   const [error, setError] = useState<string>()
   const [imageError, setImageError] = useState<string>()
   const [receipt, setReceipt] = useState<FeedbackSummary>()
   const picker = useRef<HTMLInputElement>(null)
-  const editor = useRef<HTMLTextAreaElement>(null)
   const imageLock = useRef(false)
   const active = useRef(true)
   useEffect(() => {
@@ -175,18 +175,6 @@ export function FeedbackPanel({
       active.current = false
     }
   }, [])
-  useEffect(() => {
-    if (draft.anchor) editor.current?.focus()
-  }, [draft.anchor])
-  const { refetch } = history
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      // useAction renders action errors and resolves undefined, including aborted polls.
-      // oxlint-disable-next-line typescript/no-floating-promises
-      if (!document.hidden) void refetch()
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [refetch])
 
   const addImages = async (files: File[]) => {
     if (!files.length || imageLock.current || draft.readingImages) return
@@ -202,9 +190,9 @@ export function FeedbackPanel({
     if (
       draft.images.reduce((sum, image) => sum + imageBytes(image), 0) +
         files.reduce((sum, file) => sum + file.size, 0) >
-      10 * 1024 * 1024
+      FEEDBACK_IMAGE_MAX_BYTES
     ) {
-      setImageError('Reference images must total 10 MiB or less.')
+      setImageError('Reference images must total 8 MiB or less.')
       return
     }
     if (files.some((file) => !file.name.trim() || file.name.length > 200)) {
@@ -262,6 +250,12 @@ export function FeedbackPanel({
       notes,
       images: [...draft.images],
     }
+    if (!draft.request && new Blob([JSON.stringify(request)]).size > FEEDBACK_MAX_JSON_BYTES) {
+      setError(
+        'Feedback payload is too large; remove an image or shorten notes. Your drafts are unchanged.',
+      )
+      return
+    }
     const sentGeneral = draft.request ? draft.requestGeneral : draft.general
     update((current) => ({ ...current, request, requestGeneral: sentGeneral }))
     setSending(true)
@@ -291,11 +285,22 @@ export function FeedbackPanel({
           setError(
             result.deliveryError ?? 'Feedback saved; delivery is pending. Retry the same batch.',
           )
-        await history.refetch()
       }
     } catch (failure) {
-      if (active.current)
+      if (failure instanceof ActionError && failure.status === 413) {
+        // HTTP admission rejected the whole request before persistence; edits can safely form a fresh batch.
+        update((current) =>
+          current.request?.requestId === request.requestId
+            ? { ...current, request: undefined }
+            : current,
+        )
+        if (active.current)
+          setError(
+            'Feedback is too large. Remove an image or shorten notes, then send again. Your drafts are unchanged.',
+          )
+      } else if (active.current) {
         setError(`Delivery not confirmed: ${errorMessage(failure)}. Retry uses the same batch.`)
+      }
     } finally {
       if (active.current) setSending(false)
     }
@@ -308,18 +313,11 @@ export function FeedbackPanel({
     <div className="flex min-h-0 flex-1 flex-col" data-artifact-feedback>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-3">
         <section className="space-y-3">
-          <div className="flex items-baseline justify-between gap-2">
-            <h2 className="text-[13px] font-medium">
-              Drafts{draft.notes.length > 0 ? ` · ${draft.notes.length}` : ''}
+          {draft.notes.length > 0 && (
+            <h2 className="text-[12px] font-medium text-muted-foreground">
+              Notes · {draft.notes.length}
             </h2>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              rev {short(draft.contentHash)}
-            </span>
-          </div>
-          <p className="text-[12px] leading-relaxed text-muted-foreground">
-            Not sent or saved to disk. Drafts stay in this tab when you switch surfaces; send before
-            reloading.
-          </p>
+          )}
           {draft.notes.map((note, index) => {
             const status = note.anchor ? statuses[anchored.indexOf(note)] : undefined
             return (
@@ -363,60 +361,9 @@ export function FeedbackPanel({
             )
           })}
           {draft.anchor && (
-            <div className="space-y-2 rounded-md border border-border/70 p-2.5">
-              <p className="font-mono text-[11px] text-muted-foreground">
-                {draft.anchor.kind === 'text' ? 'Selected text' : 'Selected element'}
-              </p>
-              <blockquote className="max-h-24 overflow-y-auto border-l border-brand/50 pl-2 text-[12px] text-muted-foreground">
-                {draft.anchor.text || draft.anchor.selector}
-              </blockquote>
-              <textarea
-                aria-label="Note for selection"
-                className={field}
-                onChange={(event) =>
-                  update((current) => ({ ...current, editor: event.target.value }))
-                }
-                placeholder="What should change here?"
-                maxLength={4000}
-                ref={editor}
-                rows={3}
-                value={draft.editor}
-              />
-              <div className="flex gap-2">
-                <Button
-                  disabled={!draft.editor.trim() || draft.notes.length >= 50}
-                  onClick={() => {
-                    update((current) => ({
-                      ...current,
-                      notes: [
-                        ...current.notes,
-                        {
-                          id: crypto.randomUUID(),
-                          text: current.editor.trim(),
-                          anchor: current.anchor,
-                        },
-                      ],
-                      editor: '',
-                      anchor: undefined,
-                    }))
-                    onDraftAdded()
-                  }}
-                  size="sm"
-                  variant="outline"
-                >
-                  Add note
-                </Button>
-                <Button
-                  onClick={() =>
-                    update((current) => ({ ...current, anchor: undefined, editor: '' }))
-                  }
-                  size="sm"
-                  variant="ghost"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
+            <Button onClick={onContinueNote} size="sm" variant="outline">
+              Continue selected note
+            </Button>
           )}
           <label className="block space-y-2 text-[12px]">
             <span className="text-muted-foreground">General feedback</span>
@@ -456,7 +403,7 @@ export function FeedbackPanel({
               {readingImages ? 'Reading images…' : 'Reference images'}
             </Button>
             <p className="text-[11px] text-muted-foreground">
-              PNG, JPEG, WebP · up to 4 · 10 MiB total
+              PNG, JPEG, WebP · up to 4 · 8 MiB total
             </p>
             {draft.images.length > 0 && (
               <div className="grid grid-cols-2 gap-2">
@@ -502,58 +449,35 @@ export function FeedbackPanel({
               </p>
             )}
           </div>
-          <label className="block space-y-1.5 text-[12px] text-muted-foreground">
-            <span>Send to conversation</span>
-            <input
-              className={field}
-              disabled={sending || !!draft.request}
-              inputMode="numeric"
-              onChange={(event) =>
-                update((current) => ({ ...current, recipient: event.target.value }))
-              }
-              type="text"
-              value={draft.recipient}
-            />
-          </label>
-          <p className="break-words text-[11px] leading-relaxed text-muted-foreground">
-            {conversationName(Number(draft.recipient), conversations)}. Concluded or unavailable
-            destinations route through @ultimate.
-          </p>
-        </section>
-        <section className="space-y-2 border-t border-border/70 pt-4">
-          <h2 className="text-[13px] font-medium">Feedback history</h2>
-          {history.data?.length === 50 && (
-            <p className="text-[11px] text-muted-foreground">
-              Showing the latest 50 batches. Earlier feedback is retained.
+          <details className="space-y-2 text-[12px] text-muted-foreground">
+            <summary className="cursor-pointer break-words">
+              To {conversationName(Number(draft.recipient), conversations)}
+            </summary>
+            <label className="block space-y-1.5 text-[12px] text-muted-foreground">
+              <span>Send to conversation</span>
+              <input
+                className={field}
+                disabled={sending || !!draft.request}
+                inputMode="numeric"
+                onChange={(event) =>
+                  update((current) => ({ ...current, recipient: event.target.value }))
+                }
+                type="text"
+                value={draft.recipient}
+              />
+            </label>
+            <p className="break-words text-[11px] leading-relaxed text-muted-foreground">
+              {conversationName(Number(draft.recipient), conversations)}. Concluded or unavailable
+              destinations route through @ultimate.
             </p>
-          )}
-          {history.loading && !history.data && (
-            <p className="text-[12px] text-muted-foreground">Loading feedback…</p>
-          )}
-          {history.error && (
-            <p className="text-[12px] text-error" role="alert">
-              Couldn’t load feedback.{' '}
-              <button
-                className="cursor-pointer underline"
-                onClick={() => void history.refetch()}
-                type="button"
-              >
-                Retry
-              </button>
-            </p>
-          )}
-          {receipt && !history.data?.some((item) => item.id === receipt.id) && (
-            <Receipt bundle={receipt} contentHash={artifact.contentHash} />
-          )}
-          {history.data?.map((bundle) => (
-            <Receipt bundle={bundle} contentHash={artifact.contentHash} key={bundle.id} />
-          ))}
-          {history.data?.length === 0 && !receipt && (
-            <p className="text-[12px] text-muted-foreground">No feedback sent yet.</p>
-          )}
+          </details>
         </section>
+        {receipt && <Receipt bundle={receipt} contentHash={artifact.contentHash} />}
       </div>
       <div className="space-y-2 border-t border-border/70 bg-background p-3">
+        <p className="font-mono text-[10px] text-muted-foreground">
+          Drafts in this tab · not sent · rev {short(draft.contentHash)}
+        </p>
         {draft.request && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             An earlier batch is awaiting confirmation. Retry that exact batch first; newer edits
@@ -580,6 +504,109 @@ export function FeedbackPanel({
           {sending ? 'Sending…' : draft.request ? 'Retry feedback' : 'Send feedback'}
         </Button>
       </div>
+    </div>
+  )
+}
+
+export function NoteEditor({
+  draft,
+  update,
+  onAdded,
+}: {
+  draft: ReviewDraft
+  update: (change: (current: ReviewDraft) => ReviewDraft) => void
+  onAdded: () => void
+}) {
+  return (
+    <div className="space-y-3" data-artifact-note>
+      <blockquote className="max-h-20 overflow-y-auto border-l border-border pl-2 text-[12px] text-muted-foreground">
+        {draft.anchor?.text || draft.anchor?.selector}
+      </blockquote>
+      <textarea
+        aria-label="Note for selection"
+        className={field}
+        maxLength={4000}
+        rows={3}
+        placeholder="What should change here?"
+        value={draft.editor}
+        onChange={(event) => update((current) => ({ ...current, editor: event.target.value }))}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            update((current) => ({ ...current, anchor: undefined, editor: '' }))
+            onAdded()
+          }}
+        >
+          Discard
+        </Button>
+        <Button
+          size="sm"
+          disabled={!draft.editor.trim() || draft.notes.length >= 50}
+          onClick={() => {
+            update((current) => ({
+              ...current,
+              notes: [
+                ...current.notes,
+                { id: crypto.randomUUID(), text: current.editor.trim(), anchor: current.anchor },
+              ],
+              editor: '',
+              anchor: undefined,
+            }))
+            onAdded()
+          }}
+        >
+          Add note
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Added notes stay in this tab until you send feedback.
+      </p>
+    </div>
+  )
+}
+
+export function FeedbackHistory({ artifact }: { artifact: Artifact }) {
+  const history = useAction(FeedbackList, { artifactId: artifact.id }, { onError: () => {} })
+  const { refetch } = history
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // useAction renders errors and resolves undefined, including aborted polls.
+      // oxlint-disable-next-line typescript/no-floating-promises
+      if (!document.hidden) void refetch()
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [refetch])
+  return (
+    <div className="space-y-3 p-3" data-artifact-history>
+      {history.data?.length === 50 && (
+        <p className="text-[11px] text-muted-foreground">
+          Showing the latest 50 batches. Earlier feedback is retained.
+        </p>
+      )}
+      {history.loading && !history.data && (
+        <p className="text-[12px] text-muted-foreground">Loading feedback…</p>
+      )}
+      {history.error && (
+        <p className="text-[12px] text-error" role="alert">
+          Couldn’t load feedback.{' '}
+          <button
+            className="cursor-pointer underline"
+            onClick={() => history.refetch()}
+            type="button"
+          >
+            Retry
+          </button>
+        </p>
+      )}
+      {history.data?.map((bundle) => (
+        <Receipt bundle={bundle} contentHash={artifact.contentHash} key={bundle.id} />
+      ))}
+      {history.data?.length === 0 && (
+        <p className="text-[12px] text-muted-foreground">No feedback sent yet.</p>
+      )}
     </div>
   )
 }

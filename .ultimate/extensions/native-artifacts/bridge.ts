@@ -30,7 +30,7 @@ export function decodeAnchor(value: unknown): ArtifactAnchor | undefined {
       return undefined
     return { path: [...b.path] as number[], offset: b.offset as number }
   }
-  if (a.kind !== 'text' || Object.keys(a).length !== 5 || !a.text.length) return undefined
+  if (a.kind !== 'text' || Object.keys(a).length !== 5 || !a.text.trim().length) return undefined
   const start = boundary(a.start)
   const end = boundary(a.end)
   if (start && end) return { kind: 'text', selector: a.selector, text: a.text, start, end }
@@ -42,6 +42,7 @@ export type FrameMessage =
   | { type: 'target'; anchor: ArtifactAnchor }
   | { type: 'statuses'; statuses: TargetStatus[] }
   | { type: 'error'; message: string }
+  | { type: 'interaction'; active: boolean }
 
 export function decodeFrameMessage(value: unknown, channel: string): FrameMessage | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -49,6 +50,8 @@ export function decodeFrameMessage(value: unknown, channel: string): FrameMessag
   if (m.channel !== channel) return undefined
   if (m.type === 'ready' && Object.keys(m).length === 2) return { type: 'ready' }
   if (Object.keys(m).length !== 3) return undefined
+  if (m.type === 'interaction' && typeof m.active === 'boolean')
+    return { type: 'interaction', active: m.active }
   if (m.type === 'target') {
     const anchor = decodeAnchor(m.anchor)
     if (anchor) return { type: 'target', anchor }
@@ -70,6 +73,12 @@ function annotationBridge(channel: string, parentOrigin: string, decode: typeof 
   let mode = 'view'
   const send = (message: object) => parent.postMessage({ ...message, channel }, parentOrigin)
   const error = (message: string) => send({ type: 'error', message })
+  let interacting = false
+  const interaction = (active: boolean) => {
+    if (interacting === active) return
+    interacting = active
+    send({ type: 'interaction', active })
+  }
   let hovered: HTMLElement | null = null
   let focused: HTMLElement | null = null
   let outlined: HTMLElement | null = null
@@ -85,7 +94,7 @@ function annotationBridge(channel: string, parentOrigin: string, decode: typeof 
   const highlight = () => {
     restoreOutline()
     const target = hovered ?? focused
-    if (mode !== 'element' || !target) return
+    if (mode !== 'annotate' || !target) return
     outlined = target
     originalStyle = target.getAttribute('style')
     target.style.setProperty('outline', '2px solid Highlight', 'important')
@@ -167,12 +176,84 @@ function annotationBridge(channel: string, parentOrigin: string, decode: typeof 
     range.setEnd(end, anchor.end.offset)
     return !range.collapsed && range.toString() === anchor.text ? 'same' : 'changed'
   }
+  let ignoreNextClick = false
+  let lastSelection = ''
+  const captureSelection = () => {
+    if (mode !== 'annotate') return false
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) {
+      lastSelection = ''
+      return false
+    }
+    try {
+      const range = selection.getRangeAt(0)
+      if (!document.body.contains(range.commonAncestorContainer)) return false
+      const quote = range.toString()
+      // Native block/word selection can include an empty or whitespace-only intermediate range. It is not a note.
+      if (!quote.trim()) {
+        lastSelection = ''
+        return true
+      }
+      let root: Node = range.commonAncestorContainer
+      if (root.nodeType !== Node.ELEMENT_NODE) root = root.parentNode!
+      const anchor = decode({
+        kind: 'text',
+        selector: selector(root as Element),
+        text: quote,
+        start: { path: path(root, range.startContainer), offset: range.startOffset },
+        end: { path: path(root, range.endContainer), offset: range.endOffset },
+      })
+      if (!anchor || status(anchor) !== 'same')
+        throw new Error('Select between 1 and 2,000 characters of text.')
+      const key = JSON.stringify(anchor)
+      if (key !== lastSelection) {
+        lastSelection = key
+        restoreOutline()
+        send({ type: 'target', anchor })
+      }
+    } catch (e) {
+      error(e instanceof Error ? e.message : 'Cannot capture this selection.')
+    }
+    return true
+  }
+  document.addEventListener('pointerdown', () => {
+    ignoreNextClick = false
+    if (mode === 'annotate') interaction(true)
+  })
+  document.addEventListener('pointerup', () => {
+    ignoreNextClick = captureSelection()
+    interaction(false)
+  })
+  document.addEventListener('pointercancel', () => interaction(false))
+  window.addEventListener('blur', () => interaction(false))
+  document.addEventListener('keydown', (event) => {
+    if (
+      mode === 'annotate' &&
+      (event.shiftKey ||
+        event.key === 'Shift' ||
+        ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a'))
+    )
+      interaction(true)
+  })
+  document.addEventListener('keyup', (event) => {
+    // Wait for selection modifiers to be released, not each intermediate Shift+Arrow step.
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      captureSelection()
+      interaction(false)
+    }
+  })
   document.addEventListener(
     'click',
     (event) => {
-      if (mode !== 'element' || !(event.target instanceof Element)) return
+      if (mode !== 'annotate' || !(event.target instanceof Element)) return
       event.preventDefault()
       event.stopImmediatePropagation()
+      if (ignoreNextClick) {
+        ignoreNextClick = false
+        return
+      }
+      // Keep an existing native selection intact when a platform emits click without pointerup.
+      if (captureSelection()) return
       restoreOutline()
       try {
         const anchor = decode({
@@ -194,39 +275,21 @@ function annotationBridge(channel: string, parentOrigin: string, decode: typeof 
     if (!m || typeof m !== 'object' || m.channel !== channel) return
     if (m.type === 'configure') {
       if (
-        !['view', 'element', 'text'].includes(m.mode) ||
+        !['view', 'annotate'].includes(m.mode) ||
         !Array.isArray(m.anchors) ||
         m.anchors.length > 200
       )
         return
       const anchors = m.anchors.map(decode)
       if (anchors.some((a: ArtifactAnchor | undefined) => !a)) return
+      if (mode !== m.mode) {
+        lastSelection = ''
+        ignoreNextClick = false
+      }
       mode = m.mode
+      if (mode !== 'annotate') interaction(false)
       highlight()
       send({ type: 'statuses', statuses: anchors.map(status) })
-    } else if (m.type === 'capture' && mode === 'text') {
-      try {
-        const selection = window.getSelection()
-        if (!selection || selection.rangeCount !== 1 || selection.isCollapsed)
-          throw new Error('Select some text in the artifact first.')
-        const range = selection.getRangeAt(0)
-        if (!document.body.contains(range.commonAncestorContainer))
-          throw new Error('Select text inside the artifact.')
-        let root: Node = range.commonAncestorContainer
-        if (root.nodeType !== Node.ELEMENT_NODE) root = root.parentNode!
-        const anchor = decode({
-          kind: 'text',
-          selector: selector(root as Element),
-          text: range.toString(),
-          start: { path: path(root, range.startContainer), offset: range.startOffset },
-          end: { path: path(root, range.endContainer), offset: range.endOffset },
-        })
-        if (!anchor || status(anchor) !== 'same')
-          throw new Error('Select between 1 and 2,000 characters of text.')
-        send({ type: 'target', anchor })
-      } catch (e) {
-        error(e instanceof Error ? e.message : 'Cannot capture this selection.')
-      }
     }
   })
   // Keep trusted bridge source out of body text, native selections and authored CSS display rules.
