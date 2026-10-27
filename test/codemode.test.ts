@@ -243,6 +243,9 @@ it('traces a tool a codemode script calls, and its service call, inside the code
   ]) {
     await mkdir(join(options.ultimateRoot, 'extensions', name))
     await writeFile(join(options.ultimateRoot, 'extensions', name, 'server.ts'), source)
+    await until(
+      () => !!server.extensions.info().find((entry) => entry.name === name)?.server?.loadedAt,
+    )
   }
   await until(async () =>
     (await server.root.agent(context)).tools.some((tool) => tool.name === 'probe'),

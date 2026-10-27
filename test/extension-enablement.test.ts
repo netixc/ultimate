@@ -210,6 +210,8 @@ it.concurrent('refuses a tool name another extension of the same layer already p
     await mkdir(folder, { recursive: true })
     files[name] = join(folder, 'server.ts')
     await writeFile(files[name], facet(name))
+    // Admit the holder before its competitor; filesystem events may arrive out of order.
+    await until(() => !!server.extensions.info().find((entry) => entry.name === name)?.server)
   }
   const info = (name: string) => server.extensions.info().find((e) => e.name === name)
   const clash = async () =>
