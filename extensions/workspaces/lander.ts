@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { mkdir, readdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
-import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -748,16 +747,18 @@ export function createLander(
           }
         }
         /** Push what landed and report it: commits, flaky checks, push, restart hint. */
-        const landedReport = async (settings: Settings, landed: Landed, sha: string) => {
-          const pushed = await push(settings, sha)
+        const landedReport = async (settings: Settings, landed: Landed) => {
+          const pushed = await push(settings, landed.sha)
           if (pushed.retry) return pushed.retry
           const needsRestart =
             (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
             landed.paths.some((path) => /^(server|shared)\//.test(path))
           return finish(
-            [summary(landed, sha), pushed.text, ...(needsRestart ? ['Needs restart.'] : [])].join(
-              '\n',
-            ),
+            [
+              summary(landed, landed.sha),
+              pushed.text,
+              ...(needsRestart ? ['Needs restart.'] : []),
+            ].join('\n'),
             {
               ...landedOutcome(landed),
               ...(pushed.remote ? { pushed: pushed.remote } : {}),
@@ -777,7 +778,7 @@ export function createLander(
             !pushRetried &&
             (await contains(source, entry.landed.sha, `refs/heads/${target}`))
           )
-            return await landedReport(settings, entry.landed, entry.landed.sha)
+            return await landedReport(settings, entry.landed)
           // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
           let prepared = await runtime.memo<Prepared>(`prepared:${id}:${attempt}`, context)
           if (!prepared) {
@@ -1003,25 +1004,23 @@ export function createLander(
             if (attempt < attempts) return retry()
             return fail(`${target} kept moving during ${attempts} attempts.`)
           }
-          // The first fast-forward decides what the submission landed, durably on its queue entry with the target's
-          // new tip, so any later lander task reports that landing; a push retry integrates again from there.
+          // A successful push retry reports the checked revision over the submission's full landing range, not
+          // only the retry's delta. Keep the first local receipt separately for failure and task recovery.
+          const landedBase = entry.landed?.base ?? base
           const candidate: Landed = {
             sha: integrated,
-            base,
-            commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
-            paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
+            base: landedBase,
+            commits: lines(await git(source, 'log', '--oneline', `${landedBase}..${integrated}`)),
+            paths: lines(await git(source, 'diff', '--name-only', landedBase, integrated)),
             flaky,
           }
-          let landed = candidate
           await runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
             const saved = draft.queue.find((item) => item.id === id)!
             saved.landed ??= candidate
-            // A copy: the draft is gone once the commit settles.
-            landed = copyJson(saved.landed) as Landed
             draft.items[String(entry.conversationId)].landed = integrated
           }, context)
-          return await landedReport(settings, landed, integrated)
+          return await landedReport(settings, candidate)
         } catch (error) {
           if (signal.aborted) throw error
           return fail('it failed', failure(error))
