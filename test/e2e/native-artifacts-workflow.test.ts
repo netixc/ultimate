@@ -202,8 +202,12 @@ it('queues element, text, images and real issue fixes without waking the maker u
     await note.getByRole('button', { name: 'Queue', exact: true }).click()
     const show = page.getByRole('button', { name: /Show sidebar/ })
     if (await show.isVisible()) await show.click()
+    // The sidebar can be DOM-visible before the compositor updates iframe hit testing.
+    // Capture the painted overlay before sending the next pointer.
+    await conversation.screenshot()
     const queuedNotes = conversation.getByRole('button', { name: 'Queued notes', exact: true })
-    if ((await queuedNotes.getAttribute('aria-expanded')) !== 'true') await queuedNotes.click()
+    expect(await queuedNotes.getAttribute('aria-expanded')).toBe('false')
+    await queuedNotes.click()
     await queue.getByText('Phone draft', { exact: true }).waitFor()
     await until(
       async () =>

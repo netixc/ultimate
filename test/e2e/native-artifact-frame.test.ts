@@ -14,6 +14,7 @@ import { until } from '../helpers.ts'
 async function inFrame(
   html: string,
   run: (page: Page, frame: Frame, channel: string) => Promise<void>,
+  assets: ArtifactSnapshot['assets'] = [],
 ) {
   const server = createServer((_request, response) => {
     response.setHeader('Content-Type', 'text/html')
@@ -41,12 +42,16 @@ async function inFrame(
         title: 'Frame protocol',
         ownerConversation: 1,
         recipientConversation: 1,
-        source: { workspace: '/workspace', path: 'index.html', assets: [] },
+        source: {
+          workspace: '/workspace',
+          path: 'index.html',
+          assets: assets.map((asset) => asset.path),
+        },
         contentHash: 'one',
         updatedAt: 1,
       },
       html,
-      assets: [],
+      assets,
     }
     const built = buildDocument(snapshot, origin)
     await page.evaluate((srcdoc) => {
@@ -171,6 +176,122 @@ it('locks selected element/text geometry, reanchors on scroll/resize, and reveal
       await until(async () => (await frame.evaluate(() => CSS.highlights.size)) === 0)
       expect(await frame.locator('body').evaluate((body) => body.innerHTML)).toBe(bodyBefore)
     },
+  )
+})
+
+it('keeps hover and locked image boundaries visible inside a clipping ancestor without changing anchors or authored styles', async () => {
+  await inFrame(
+    `<style>body{margin:0}.clip{position:relative;overflow:hidden;width:calc(100vw - 60px);height:600px;margin:30px;border-radius:12px}img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.caption{position:absolute;bottom:0;left:0;right:0;height:40px;background:#0008}</style>
+    <main class="clip"><img id="picture" src="fill.png" alt="Selected image"><span class="caption">Caption</span></main>`,
+    async (page, frame, channel) => {
+      const iframe = page.locator('iframe')
+      const image = frame.locator('#picture')
+      await image.evaluate((img) => (img as HTMLImageElement).decode())
+      const original = await frame.locator('body').evaluate((body) => body.innerHTML)
+      const changedBoundary = async (before: Buffer, after: Buffer, edge: 'right' | 'bottom') => {
+        const rect = await image.evaluate((img) => {
+          const box = img.getBoundingClientRect()
+          return { left: box.left, top: box.top, right: box.right, bottom: box.bottom }
+        })
+        return page.evaluate(
+          async ({ before: baselinePng, after: selectedPng, rect: bounds, edge: side }) => {
+            const pixels = async (base64: string) => {
+              const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0))
+              const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+              const canvas = document.createElement('canvas')
+              canvas.width = bitmap.width
+              canvas.height = bitmap.height
+              const context = canvas.getContext('2d')!
+              context.drawImage(bitmap, 0, 0)
+              bitmap.close()
+              return context.getImageData(0, 0, canvas.width, canvas.height)
+            }
+            const a = await pixels(baselinePng)
+            const b = await pixels(selectedPng)
+            let changed = 0
+            let total = 0
+            const start =
+              side === 'right'
+                ? Math.max(16, Math.ceil(bounds.top) + 16)
+                : Math.ceil(bounds.left) + 16
+            const end =
+              side === 'right' ? Math.min(a.height - 16, bounds.bottom - 16) : bounds.right - 16
+            for (let offset = start; offset < end; offset++) {
+              const x = side === 'right' ? Math.floor(bounds.right) - 2 : offset
+              const y = side === 'right' ? offset : Math.floor(bounds.bottom) - 2
+              const at = (y * a.width + x) * 4
+              if ([0, 1, 2].some((component) => a.data[at + component] !== b.data[at + component]))
+                changed++
+              total++
+            }
+            return changed / total
+          },
+          { before: before.toString('base64'), after: after.toString('base64'), rect, edge },
+        )
+      }
+      for (const width of [640, 390]) {
+        await page.setViewportSize({ width: width === 390 ? 390 : 1000, height: 844 })
+        await iframe.evaluate(
+          (element, frameWidth) => (element.style.width = `${frameWidth}px`),
+          width,
+        )
+        await configure(page, channel, { mode: 'view' })
+        await frame.evaluate(() => scrollTo(0, 0))
+        await page.mouse.move(10, 700)
+        const baseline = await iframe.screenshot()
+        await configure(page, channel, {})
+        const rect = await image.boundingBox()
+        const count = (await messages(page, channel)).filter(
+          (message) => message.type === 'target',
+        ).length
+        await page.mouse.move(rect!.x + rect!.width / 2, 200)
+        expect(await changedBoundary(baseline, await iframe.screenshot(), 'right')).toBeGreaterThan(
+          0.8,
+        )
+        expect(
+          (await messages(page, channel)).filter((message) => message.type === 'target'),
+        ).toHaveLength(count)
+        await page.mouse.click(rect!.x + rect!.width / 2, 200)
+        await until(
+          async () =>
+            (await messages(page, channel)).filter((message) => message.type === 'target').length >
+            count,
+        )
+        const target = (await messages(page, channel))
+          .filter((message) => message.type === 'target')
+          .at(-1)!
+        if (target.type !== 'target') throw new Error('Missing image target')
+        expect(target.anchor).toMatchObject({
+          kind: 'element',
+          text: '',
+          selector: expect.stringContaining('img:nth-of-type(1)'),
+        })
+        await configure(page, channel, { mode: 'view', selected: target.anchor })
+        await page.mouse.move(10, 700)
+        expect(await changedBoundary(baseline, await iframe.screenshot(), 'right')).toBeGreaterThan(
+          0.8,
+        )
+        await frame.evaluate(() => scrollTo(0, document.documentElement.scrollHeight))
+        await until(async () =>
+          (await messages(page, channel)).some(
+            (message) => message.type === 'rect' && message.rect !== null && message.rect.y < 0,
+          ),
+        )
+        const selectedBottom = await iframe.screenshot()
+        await configure(page, channel, { mode: 'view' })
+        const baselineBottom = await iframe.screenshot()
+        expect(await changedBoundary(baselineBottom, selectedBottom, 'bottom')).toBeGreaterThan(0.8)
+        expect(await frame.locator('body').evaluate((body) => body.innerHTML)).toBe(original)
+      }
+    },
+    [
+      {
+        path: 'fill.png',
+        mime: 'image/png',
+        base64:
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYGD4DwAAAP//cGajQwAAAAZJREFUAwABDgEC81VxbAAAAABJRU5ErkJggg==',
+      },
+    ],
   )
 })
 

@@ -231,11 +231,13 @@ function LoadedReview({
   const frame = useRef<HTMLElement>(null)
   const layout = useAction(LayoutRead, { artifactId: artifact.id }, { onError: () => {} })
   const [layoutState, setLayoutState] = useState<LayoutState>()
+  const currentChannel = useRef(document.channel)
+  currentChannel.current = document.channel
   const [checking, setChecking] = useState(true)
   const [layoutError, setLayoutError] = useState<string>()
   const lastPass = useRef<LayoutDiagnostics | undefined>(undefined)
   useEffect(() => {
-    if (layout.data) setLayoutState(layout.data)
+    if (layout.data) setLayoutState((current) => current ?? layout.data)
   }, [layout.data])
   useEffect(() => {
     setChecking(true)
@@ -291,12 +293,14 @@ function LoadedReview({
         artifactId: artifact.id,
         contentHash: artifact.contentHash,
       })
+      if (currentChannel.current !== document.channel) return
       setLayoutState(state)
       setLayoutError(undefined)
     } catch (failure) {
-      setLayoutError(`Couldn’t save layout check: ${errorMessage(failure)}`)
+      if (currentChannel.current === document.channel)
+        setLayoutError(`Couldn’t save layout check: ${errorMessage(failure)}`)
     } finally {
-      setChecking(false)
+      if (currentChannel.current === document.channel) setChecking(false)
     }
   }
   const dismiss = async (issueId: string) => {
@@ -306,6 +310,7 @@ function LoadedReview({
         issueId,
         contentHash: artifact.contentHash,
       })
+      if (currentChannel.current !== document.channel) return
       setLayoutState(state)
       setLayoutError(undefined)
       update((current) => ({
@@ -313,7 +318,8 @@ function LoadedReview({
         selectedIssues: current.selectedIssues?.filter((id) => id !== issueId),
       }))
     } catch (failure) {
-      setLayoutError(`Couldn’t dismiss issue: ${errorMessage(failure)}`)
+      if (currentChannel.current === document.channel)
+        setLayoutError(`Couldn’t dismiss issue: ${errorMessage(failure)}`)
     }
   }
   const sourceError = latest ? latest.sourceError : document.sourceError

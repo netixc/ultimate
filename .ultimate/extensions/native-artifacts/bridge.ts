@@ -218,7 +218,8 @@ function annotationBridge(
     outlined = target
     originalStyle = target.getAttribute('style')
     target.style.setProperty('outline', '2px solid Highlight', 'important')
-    target.style.setProperty('outline-offset', '2px', 'important')
+    // Paint inside the target: an outside outline disappears when it fills a clipped ancestor.
+    target.style.setProperty('outline-offset', '-2px', 'important')
   }
   const candidate = (target: EventTarget | null) =>
     target instanceof HTMLElement && document.body.contains(target) ? target : null
