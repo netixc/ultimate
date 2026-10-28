@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ArtifactAnchor } from '../artifacts/types.ts'
+import type { ArtifactAnchor } from './types.ts'
 import { decodeFrameMessage } from './bridge.ts'
 import type {
   CaptureMode,
@@ -8,7 +8,7 @@ import type {
   RevealTarget,
   TargetRect,
   TargetStatus,
-} from './types.ts'
+} from './viewer-types.ts'
 
 export type ArtifactFrameProps = {
   document: NativeDocument

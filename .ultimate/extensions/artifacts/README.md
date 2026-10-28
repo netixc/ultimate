@@ -1,12 +1,36 @@
 # Local HTML artifacts
 
-A shared backend retains the current local HTML artifact and saves human review feedback before admitting its wake message.
+Publish and review local HTML inside Ultimate, with retained snapshots, native annotation and human feedback saved before admitting its wake message.
+
+## Native review
+
+Open **Artifacts** in the surface switcher, or **Open review** on an `artifact_publish` card. The artifact is on the left; a real SDK **Conversation** is on the right. Its transcript is the complete destination conversation and may include unrelated work. The top bar holds **Issues**, **Annotate**, **Hide sidebar / Show sidebar**, and quiet artifact details. On phones the conversation becomes a bottom sheet, leaving part of the artifact visible; it starts hidden.
+
+With **Annotate** on, hovering marks a target without opening an editor. Click an element or release a native text selection to open a compact anchored note card. The card follows the target after scrolling and stays within the visible viewport, including the software keyboard's visual viewport. Native keyboard selection is supported; physical long-press selection handles still need device verification. Turning Annotate off restores normal artifact interaction without discarding an open note. Hiding the conversation or clicking another target never replaces the unfinished editor.
+
+The note card offers **Attach image**, **Cancel**, and **Queue**. Queue adds an ordinary unsent draft; it never sends or wakes the maker. Cancel discards just that unfinished note and its images. Queued notes remain editable in the right panel. Each note can have its own reference images, and general feedback can have general references. All pickers share the same limit: **four** decoded PNG, JPEG or WebP images totaling **8 MiB** across the batch. Encoded JSON size is checked before freezing a request.
+
+**Send to Agent**, in the right-side composer, is the only admission action. The model-free landing log keeps its read-only banner even as a review destination; choose another conversation to send, without losing draft notes or images. It calls `reviewFeedback`, not ordinary SDK chat submission. The composer replacement is scoped by local React context; other Ultimate conversations keep their normal composer. The review conversation also uses `ComposerRedirect` to reject ordinary admission if the SDK ever falls back to its default composer. Enter and Ctrl+Enter do not send the review batch. **Send to conversation** is editable and changes the real transcript shown in the panel.
+
+**Receipts** opens saved feedback and actual delivery routes. It polls summaries only while open. Image bytes load only when a batch's details are explicitly expanded; closing details releases them. It shows the latest 50 batches without deleting older feedback. Receipts distinguish **Saved · delivery pending** from **Queued to inbox**, show the submission ID and actual reroute, and never claim the maker has read or fixed anything.
+
+**Artifact details** contains the maker, original revision, local path and static-review policy. Authored scripts and network access are blocked. The opaque-origin viewer and annotation bridge live in `sandbox.ts`, `bridge.ts` and `viewer.tsx`; HTML is never inserted into Ultimate's trusted DOM. Browser action contracts live in `refs.ts`, reexported by `ui.tsx` alongside local composer context and drafts. Viewer types live in `viewer-types.ts`; artifact/feedback/layout types and image limits stay in `types.ts`.
+
+## Drafts, refresh and deployment
+
+Unsent work stays only in this browser tab's memory, including across surface switches and sidebar visibility changes. Only artifact selection uses shared shell UI state. A reload/close warning protects nonempty drafts but is not a durable-save guarantee.
+
+Reads poll every two seconds while visible, sending the latest fetched hash, including a pending update. Unchanged responses carry metadata and source status, never HTML/assets, and never replace the iframe. Actual selection gestures, open review overlays and unfinished feedback defer new snapshots. Finish or remove drafts and close overlays to apply the latest revision automatically. Annotate being on does not itself block refresh. Each batch retains one original revision.
+
+A send retains its exact request ID and payload until delivery is confirmed. An uncertain error keeps that stable batch for retry. A definitive HTTP 413 or pre-persistence `rejected: 'too-large' | 'destination'` result clears only the frozen request, preserving draft content so the user can correct it and send a fresh batch. Successful admission clears only submitted notes, images and unchanged general feedback; concurrent edits remain drafts. Concluded or unavailable destinations route through @ultimate, and receipts show the actual route.
+
+The former separate native viewer registration and action routes are removed, without compatibility aliases. Old tabs and their tab-only drafts cannot migrate through hot reload. Deploy only in a draft-safe window: finish or deliberately discard unsent work first, then perform a controlled reload and reopen **Artifacts**. Retained artifacts, feedback, receipts and layout state keep their existing storage and document identities.
 
 ## Publishing and reading
 
 `artifact_publish({id?,title,path,assets?})` publishes from the tool caller's conversation. The `publish` action accepts the same `PublishArtifact`; its owner always comes from `ctx.conversationId`, not JSON. Only that owner can republish an existing id. Reuse the id for revisions. The tool returns `Artifact` in `details` for a reviewer-owned renderer. No live server, history, variants or workflow engine is involved.
 
-The service token is `ArtifactsApi` in `api.ts`. Its trusted server methods are `publish(input, ownerConversation, ctx)`, `list(ctx)`, `read(id, ctx)`, `feedback(input, ctx)`, `feedbackList(artifactId, ctx)` and `feedbackRead(artifactId, id, ctx)`. Context is a Chord `Context`. Server adapters must derive the publish owner from their authenticated action/tool context. Feedback-creating proxy actions must be **user-only and sealed**, as the common feedback action is: agents may not impersonate human feedback through privileged typed-input admission.
+The service token is `ArtifactsApi` in `api.ts`. Its trusted server methods are `publish(input, ownerConversation, ctx)`, `list(ctx)`, `read(id, ctx)`, `feedback(input, ctx)`, `feedbackList(artifactId, ctx)` and `feedbackRead(artifactId, id, ctx)`. Context is a Chord `Context`. Server adapters must derive the publish owner from their authenticated action/tool context. Feedback-creating actions must be **user-only and sealed**: agents may not impersonate human feedback through privileged typed-input admission. Combined actions call the internal backend directly, sharing the `artifacts.operations` queue rather than using a self-service proxy; nested service traces do not inherit action sealing. The default `host.implement(ArtifactsApi, service)` remains the trusted server contract.
 
 Actions and typed refs in `refs.ts`:
 
@@ -14,8 +38,12 @@ Actions and typed refs in `refs.ts`:
 - `list(null)` → `Artifact[]` without reading source workspaces.
 - `read({id})` → `ArtifactSnapshot`, refreshing from the source where available.
 - `feedback(FeedbackInput)` → `FeedbackBundle`, saved before any wake or acknowledgement. **User-only and sealed** (image bytes do not enter the action trace).
+- `reviewRead({id,parentOrigin,knownHash?})` → `NativeDocument` or `{ unchanged: true, artifact, sourceError? }`. Validates the viewer origin, sanitizes retained HTML and omits unchanged HTML/assets/channel.
+- `reviewFeedback(FeedbackInput)` → `FeedbackBundle` or `{ rejected: 'too-large' | 'destination', message }` for definitive pre-persistence rejections. **User-only and sealed**; uncertain failures still throw for exact retry.
 - `feedbackList({artifactId})` → newest **50** `FeedbackSummary` records, retrying outstanding delivery. These contain original notes and image name/MIME metadata only, **never base64 image bytes**, so repeated polling does not hydrate up to 50 image bundles.
-- `feedbackRead({artifactId,id})` → one full `FeedbackBundle`, including exact retained reference images, read on demand. The bundle must belong to the named artifact. `feedback(input)` still returns its single full saved bundle.
+- `feedbackRead({artifactId,id})` → one full `FeedbackBundle`, including exact retained reference images, read on demand and sealed. The bundle must belong to the named artifact. `feedback(input)` still returns its single full saved bundle.
+
+`list`, `reviewRead`, `feedbackList` and `layoutRead` are poll actions. `feedback`, `reviewFeedback`, `layoutPass` and `layoutDismiss` are human-only; those actions and `feedbackRead` are sealed.
 
 An owner's current workspace is resolved inside a harness transaction from the Workspaces API's admitted index, or the owner's configured cwd when no workspace was assigned. A workspace in any state except `ready`, or a concluded/missing owner, fails closed. A removed workspace never falls back to the project checkout. Admission and source identity are checked again before updating the registry. A source that disappears, is removed, or cannot be refreshed leaves the last retained snapshot readable, with `sourceError`.
 
@@ -36,6 +64,10 @@ Source paths must be strict relative POSIX paths. Empty/dot components, dotfiles
 Reads use `O_NOFOLLOW`, a regular-file handle, bounded reads, and before/after device/inode/size/time checks for all source files and their path components. The bundle is committed only after the final checks. These checks detect ordinary edits, cleanup and symlink substitution; Node has no portable `openat` interface, so they are **not** an OS sandbox against a hostile local process swapping ancestor directories out and back between checks. The private host state directory and admitted workspace root are trusted. A filename/extension allowlist also cannot identify secrets deliberately embedded in otherwise valid HTML/CSS/images; publishers must not include them.
 
 ## Layout observations and triage
+
+The Issues count comes from stored findings, never sample data. The bridge checks two families only: material page horizontal overflow and clipped/unreachable controls. Each finding carries its actual content-frame viewport, revision, rule, selector, axis and measured overflow. Incomplete checks remain visibly incomplete; zero findings is not a full layout or accessibility review. Unsupported clipping, masking and active-animation checks include the document’s `<html>` root, not just body descendants. When fixed or absolutely positioned descendants cross a clipping ancestor, the check stays incomplete rather than guessing whether that ancestor clips them. Transforms or zoom at or above clipping/scrolling regions, non-default overflow clip margins, viewport-propagated root/body overflow, and overflow styling on inline or non-box ancestors also stay incomplete; their geometry is not used to invent defects.
+
+**Reveal** only highlights and scrolls to the selector. **Dismiss** dismisses an observation for the displayed revision. **Select all** and individual selection are tab-local. **Queue selected fixes** creates one ordinary draft note containing `layoutIssueIds`; it does not send or mark issues fixed. A batch can reference at most 50 unique issues. The backend attaches immutable observation context to admitted feedback. Only a complete newer-content measurement at the same exact viewport can resolve an issue automatically.
 
 `layoutRead({artifactId})` is a read-only polling action. `layoutPass(LayoutPassInput)` and `layoutDismiss({artifactId,issueId,contentHash})` are user-only and sealed; trusted native adapters must preserve that boundary. Agents cannot author observations or dismiss them through actions. No layout action admits feedback or wakes an agent, and there is no backend draft/queued workflow state.
 

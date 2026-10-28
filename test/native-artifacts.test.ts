@@ -2,14 +2,9 @@ import { crc32 } from 'node:zlib'
 import { expect, it } from 'vitest'
 import { parse } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
-import { buildDocument } from '../.ultimate/extensions/native-artifacts/sandbox.ts'
-import {
-  decodeAnchor,
-  decodeFrameMessage,
-} from '../.ultimate/extensions/native-artifacts/bridge.ts'
+import { buildDocument } from '../.ultimate/extensions/artifacts/sandbox.ts'
+import { decodeAnchor, decodeFrameMessage } from '../.ultimate/extensions/artifacts/bridge.ts'
 import type { ArtifactSnapshot } from '../.ultimate/extensions/artifacts/types.ts'
-import { actions } from '../.ultimate/extensions/native-artifacts/server.ts'
-import type { ActionContext } from '../server/actions.ts'
 
 function nativeSnapshot(html: string): ArtifactSnapshot {
   return {
@@ -102,35 +97,6 @@ it('retains a valid 6 MiB PNG accepted by the publisher', () => {
   ]
   const document = buildDocument(snapshot, 'https://review.example')
   expect(document.srcdoc).toContain(`src="data:image/png;base64,${snapshot.assets[0].base64}"`)
-})
-
-it('refreshes unchanged content without retransferring HTML, assets or the annotation channel', async () => {
-  const snapshot = nativeSnapshot('<p>Current content</p>')
-  snapshot.artifact.contentHash = 'a'.repeat(64)
-  const context = {
-    host: { need: () => ({ read: async () => snapshot }) },
-  } as unknown as ActionContext
-  const full = await actions.read(
-    { id: 'native-demo', parentOrigin: 'https://review.example' },
-    context,
-  )
-  expect(full).toHaveProperty('srcdoc', expect.stringContaining('Current content'))
-  expect(full).toHaveProperty('channel')
-  const unchanged = await actions.read(
-    {
-      id: 'native-demo',
-      parentOrigin: 'https://review.example',
-      knownHash: snapshot.artifact.contentHash,
-    },
-    context,
-  )
-  expect(unchanged).toEqual({
-    unchanged: true,
-    artifact: snapshot.artifact,
-    sourceError: undefined,
-  })
-  expect(unchanged).not.toHaveProperty('srcdoc')
-  expect(unchanged).not.toHaveProperty('channel')
 })
 
 it('decodes only bounded anchor, status and interaction payloads', () => {

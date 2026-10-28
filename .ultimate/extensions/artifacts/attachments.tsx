@@ -2,8 +2,8 @@ import { ImagePlusIcon, Trash2Icon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { errorMessage } from '@/sdk'
-import { FEEDBACK_IMAGE_MAX_BYTES } from '../artifacts/types.ts'
-import type { ReferenceImage } from '../artifacts/types.ts'
+import { FEEDBACK_IMAGE_MAX_BYTES } from './types.ts'
+import type { ReferenceImage } from './types.ts'
 import type { ReviewDraft } from './ui.tsx'
 
 const imageBytes = (image: ReferenceImage) =>

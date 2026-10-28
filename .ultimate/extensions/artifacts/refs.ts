@@ -11,6 +11,11 @@ import type {
   LayoutDismissInput,
   LayoutState,
 } from './types.ts'
+import type { NativeDocument } from './viewer-types.ts'
+
+export type NativeReadResult =
+  | NativeDocument
+  | { unchanged: true; artifact: Artifact; sourceError?: string }
 
 /** PublishArtifact → Artifact. Owner is always the calling conversation, never an input field. */
 export const Publish = actionRef<PublishArtifact, Artifact>('artifacts', 'publish')
@@ -20,6 +25,16 @@ export const List = actionRef<null, Artifact[]>('artifacts', 'list')
 export const Read = actionRef<{ id: string }, ArtifactSnapshot>('artifacts', 'read')
 /** FeedbackInput → FeedbackBundle. Save before waking; identical request retries reuse the receipt. */
 export const Feedback = actionRef<FeedbackInput, FeedbackBundle>('artifacts', 'feedback')
+/** Native viewer read: validate its origin, sanitize retained HTML, and omit unchanged content. */
+export const ReviewRead = actionRef<
+  { id: string; parentOrigin: string; knownHash?: string },
+  NativeReadResult
+>('artifacts', 'reviewRead')
+/** Human review admission; definitive pre-persistence rejections let the composer retain editable drafts. */
+export const ReviewFeedback = actionRef<
+  FeedbackInput,
+  FeedbackBundle | { rejected: 'too-large' | 'destination'; message: string }
+>('artifacts', 'reviewFeedback')
 /** { artifactId } → newest 50 FeedbackSummary[]. No image bytes; retries saved delivery failures. */
 export const FeedbackList = actionRef<{ artifactId: string }, FeedbackSummary[]>(
   'artifacts',

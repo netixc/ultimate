@@ -1,4 +1,4 @@
-import type { LayoutDiagnostics } from './types.ts'
+import type { LayoutDiagnostics } from './viewer-types.ts'
 
 /**
  * A small, read-only rectangular overflow/clipping heuristic, not general layout or accessibility QA.

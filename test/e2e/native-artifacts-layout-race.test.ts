@@ -46,7 +46,7 @@ it('ignores a saved old-frame layout response after a clean live revision has be
     let oldHash: string | undefined
     let savedOld: LayoutState | undefined
     let savedNew: LayoutState | undefined
-    await page.route('**/api/extensions/native-artifacts/actions/layoutPass', async (route) => {
+    await page.route('**/api/extensions/artifacts/actions/layoutPass', async (route) => {
       const hash = route.request().postDataJSON().args.contentHash as string
       const response = await route.fetch()
       const state = (await response.json()).result as LayoutState
@@ -59,7 +59,7 @@ it('ignores a saved old-frame layout response after a clean live revision has be
       await route.fulfill({ response })
     })
     await page.goto(`${server.url}/?conversation=${owner.id}`)
-    await page.locator('[data-surface="native-artifacts"]').click()
+    await page.locator('[data-surface="artifacts"]').click()
     const frame = page.frameLocator('[data-artifact-frame] iframe')
     await frame.getByRole('heading', { name: 'Old revision', exact: true }).waitFor()
     await until(() => !!savedOld)
@@ -75,8 +75,7 @@ it('ignores a saved old-frame layout response after a clean live revision has be
     await issues.waitFor()
     const oldResponse = page.waitForResponse(
       (response) =>
-        new URL(response.url()).pathname ===
-          '/api/extensions/native-artifacts/actions/layoutPass' &&
+        new URL(response.url()).pathname === '/api/extensions/artifacts/actions/layoutPass' &&
         response.request().postDataJSON().args.contentHash === oldHash,
     )
     release()
@@ -135,7 +134,7 @@ it('does not reopen acknowledged dismissals when an earlier same-revision reply 
     const saved: LayoutState[] = []
     let calls = 0
     let firstId: string | undefined
-    await page.route('**/api/extensions/native-artifacts/actions/layoutDismiss', async (route) => {
+    await page.route('**/api/extensions/artifacts/actions/layoutDismiss', async (route) => {
       const number = calls++
       if (number === 0) firstId = route.request().postDataJSON().args.issueId
       const response = await route.fetch()
@@ -145,7 +144,7 @@ it('does not reopen acknowledged dismissals when an earlier same-revision reply 
       await route.fulfill({ response })
     })
     await page.goto(`${server.url}/?conversation=${owner.id}`)
-    await page.locator('[data-surface="native-artifacts"]').click()
+    await page.locator('[data-surface="artifacts"]').click()
     await page.getByRole('button', { name: 'Issues · 2', exact: true }).click()
     const issues = page.locator('[data-artifact-issues]')
     await issues.getByText('2 open measured issues', { exact: true }).waitFor()
@@ -160,7 +159,7 @@ it('does not reopen acknowledged dismissals when an earlier same-revision reply 
       .isDisabled()
     const secondResponse = page.waitForResponse(
       (response) =>
-        response.url().endsWith('/native-artifacts/actions/layoutDismiss') &&
+        response.url().endsWith('/artifacts/actions/layoutDismiss') &&
         response.request().postDataJSON().args.issueId !== firstId,
     )
     if (!waiting) {
@@ -170,7 +169,7 @@ it('does not reopen acknowledged dismissals when an earlier same-revision reply 
     }
     const firstResponse = page.waitForResponse(
       (response) =>
-        response.url().endsWith('/native-artifacts/actions/layoutDismiss') &&
+        response.url().endsWith('/artifacts/actions/layoutDismiss') &&
         response.request().postDataJSON().args.issueId === firstId,
     )
     release()

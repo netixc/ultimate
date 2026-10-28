@@ -1,49 +1,24 @@
 /** Native artifact review actions and tab-local drafts; nothing here claims durable draft storage. */
 import { createContext, useSyncExternalStore } from 'react'
-import { actionRef } from '@/sdk'
 import type {
   Artifact,
   ArtifactAnchor,
   ArtifactNote,
-  FeedbackBundle,
-  FeedbackSummary,
   FeedbackInput,
   ReferenceImage,
-  LayoutState,
-  LayoutPassInput,
-} from '../artifacts/types.ts'
-import type { NativeDocument, TargetStatus } from './types.ts'
-
-export const List = actionRef<null, Artifact[]>('native-artifacts', 'list')
-export type NativeReadResult =
-  | NativeDocument
-  | { unchanged: true; artifact: Artifact; sourceError?: string }
-export const Read = actionRef<
-  { id: string; parentOrigin: string; knownHash?: string },
-  NativeReadResult
->('native-artifacts', 'read')
-export const Feedback = actionRef<
-  FeedbackInput,
-  FeedbackBundle | { rejected: 'too-large' | 'destination'; message: string }
->('native-artifacts', 'feedback')
-export const FeedbackList = actionRef<{ artifactId: string }, FeedbackSummary[]>(
-  'native-artifacts',
-  'feedbackList',
-)
-export const FeedbackRead = actionRef<{ artifactId: string; id: string }, FeedbackBundle>(
-  'native-artifacts',
-  'feedbackRead',
-)
-
-export const LayoutRead = actionRef<{ artifactId: string }, LayoutState>(
-  'native-artifacts',
-  'layoutRead',
-)
-export const LayoutPass = actionRef<LayoutPassInput, LayoutState>('native-artifacts', 'layoutPass')
-export const LayoutDismiss = actionRef<
-  { artifactId: string; issueId: string; contentHash: string },
-  LayoutState
->('native-artifacts', 'layoutDismiss')
+} from './types.ts'
+import type { TargetStatus } from './viewer-types.ts'
+export {
+  List,
+  ReviewRead as Read,
+  ReviewFeedback as Feedback,
+  FeedbackList,
+  FeedbackRead,
+  LayoutRead,
+  LayoutPass,
+  LayoutDismiss,
+} from './refs.ts'
+export type { NativeReadResult } from './refs.ts'
 
 export type ReviewDraft = {
   contentHash: string

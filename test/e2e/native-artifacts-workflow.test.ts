@@ -82,12 +82,12 @@ it('queues element, text, images and real issue fixes without waking the maker u
     let directSubmissions = 0
     page.on('request', (request) => {
       const path = new URL(request.url()).pathname
-      if (/^\/api\/extensions\/(?:native-artifacts|artifacts)\/actions\/feedback$/.test(path))
+      if (/^\/api\/extensions\/artifacts\/actions\/(?:feedback|reviewFeedback)$/.test(path))
         feedbackCalls++
       if (/^\/api\/conversations\/\d+\/submit$/.test(path)) directSubmissions++
     })
     await page.goto(`${server.url}/?conversation=${owner.id}`)
-    await page.locator('[data-surface="native-artifacts"]').click()
+    await page.locator('[data-surface="artifacts"]').click()
     const frame = page.frameLocator('[data-artifact-frame] iframe')
     await frame.locator('h1').waitFor()
     const annotate = page.getByRole('switch', { name: 'Annotate', exact: true })
@@ -178,7 +178,7 @@ it('queues element, text, images and real issue fixes without waking the maker u
 
     // A failed acknowledgement freezes the exact batch, but newer edits/images must remain usable drafts.
     const requests: unknown[] = []
-    await page.route('**/api/extensions/native-artifacts/actions/feedback', async (route) => {
+    await page.route('**/api/extensions/artifacts/actions/reviewFeedback', async (route) => {
       requests.push(route.request().postDataJSON())
       if (requests.length === 1)
         await route.fulfill({
@@ -201,7 +201,7 @@ it('queues element, text, images and real issue fixes without waking the maker u
     )
     const accepted = page.waitForResponse(
       (response) =>
-        new URL(response.url()).pathname === '/api/extensions/native-artifacts/actions/feedback',
+        new URL(response.url()).pathname === '/api/extensions/artifacts/actions/reviewFeedback',
     )
     await conversation.getByRole('button', { name: 'Send to Agent', exact: true }).click()
     const response = await accepted

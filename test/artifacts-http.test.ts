@@ -46,13 +46,13 @@ it('saves the largest accepted reference image through the real action endpoint'
       },
     }
     server.host.faux!.setResponses([fauxAssistantMessage('Reference received.')])
-    const result = await post(server, '/api/extensions/native-artifacts/actions/feedback', request)
+    const result = await post(server, '/api/extensions/artifacts/actions/reviewFeedback', request)
     expect(result.status).toBe(200)
     const bundle = result.data.result as FeedbackBundle
     expect(bundle.state).toBe('delivered')
     expect(bundle.submissionId).toBeTypeOf('number')
     expect(Buffer.from(bundle.images[0].base64, 'base64').equals(bytes)).toBe(true)
-    const saved = await post(server, '/api/extensions/native-artifacts/actions/feedbackRead', {
+    const saved = await post(server, '/api/extensions/artifacts/actions/feedbackRead', {
       conversationId: owner.id,
       args: { artifactId: artifact.id, id: bundle.id },
     })

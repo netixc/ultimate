@@ -5,10 +5,10 @@ import { chromium } from 'playwright-core'
 import type { Frame, Page } from 'playwright-core'
 import { expect, it } from 'vitest'
 import { browserBinary } from '../../extensions/browser/server.ts'
-import { buildDocument } from '../../.ultimate/extensions/native-artifacts/sandbox.ts'
-import { decodeFrameMessage } from '../../.ultimate/extensions/native-artifacts/bridge.ts'
+import { buildDocument } from '../../.ultimate/extensions/artifacts/sandbox.ts'
+import { decodeFrameMessage } from '../../.ultimate/extensions/artifacts/bridge.ts'
 import type { ArtifactSnapshot } from '../../.ultimate/extensions/artifacts/types.ts'
-import type { FrameMessage } from '../../.ultimate/extensions/native-artifacts/bridge.ts'
+import type { FrameMessage } from '../../.ultimate/extensions/artifacts/bridge.ts'
 import { until } from '../helpers.ts'
 
 async function inFrame(

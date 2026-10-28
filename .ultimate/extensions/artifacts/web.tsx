@@ -27,7 +27,7 @@ import {
   useViewport,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import type { Artifact, ArtifactAnchor, LayoutState } from '../artifacts/types.ts'
+import type { Artifact, ArtifactAnchor, LayoutState } from './types.ts'
 import { ArtifactComposer, FeedbackHistory, conversationName } from './feedback.tsx'
 import { Issues } from './issues.tsx'
 import { NoteCard } from './note-card.tsx'
@@ -37,7 +37,7 @@ import type {
   RevealTarget,
   TargetRect,
   TargetStatus,
-} from './types.ts'
+} from './viewer-types.ts'
 import {
   LayoutDismiss,
   LayoutPass,
@@ -81,7 +81,7 @@ function PublishedArtifact({ call, core }: { call: ToolCallView; core: ReactNode
         <Button
           onClick={() => {
             select(value.id)
-            showSurface('native-artifacts')
+            showSurface('artifacts')
           }}
           size="sm"
           variant="outline"
@@ -509,11 +509,11 @@ function LoadedReview({
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent
           className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
-          aria-describedby="native-artifacts-history-description"
+          aria-describedby="artifacts-history-description"
         >
           <div className="border-b border-border/70 px-3 py-4">
             <DialogTitle className="pr-6 text-[14px]">Feedback receipts</DialogTitle>
-            <DialogDescription className="sr-only" id="native-artifacts-history-description">
+            <DialogDescription className="sr-only" id="artifacts-history-description">
               Saved feedback and actual delivery routes, not read or repair confirmations.
             </DialogDescription>
           </div>
@@ -525,10 +525,10 @@ function LoadedReview({
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent
           className="max-h-[85dvh] overflow-y-auto p-4 sm:max-w-md"
-          aria-describedby="native-artifacts-details-description"
+          aria-describedby="artifacts-details-description"
         >
           <DialogTitle className="pr-6 text-[14px]">Artifact details</DialogTitle>
-          <DialogDescription className="text-[12px]" id="native-artifacts-details-description">
+          <DialogDescription className="text-[12px]" id="artifacts-details-description">
             Turn Annotate on, then click an element or drag over text. Queue notes first; only Send
             to Agent sends the batch.
           </DialogDescription>
@@ -646,7 +646,7 @@ export default defineWebExtension({
   composer: ArtifactComposer,
   surfaces: [
     {
-      id: 'native-artifacts',
+      id: 'artifacts',
       title: 'Artifacts',
       icon: FileCodeIcon,
       description: 'Annotate, queue and explicitly send feedback to the maker',

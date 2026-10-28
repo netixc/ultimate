@@ -16,8 +16,8 @@ import {
   useViewport,
 } from '@/sdk'
 import { WorkspacesDoc } from '../../../extensions/workspaces/refs.ts'
-import { FEEDBACK_MAX_JSON_BYTES } from '../artifacts/types.ts'
-import type { Artifact, ArtifactNote, FeedbackInput, FeedbackSummary } from '../artifacts/types.ts'
+import { FEEDBACK_MAX_JSON_BYTES } from './types.ts'
+import type { Artifact, ArtifactNote, FeedbackInput, FeedbackSummary } from './types.ts'
 import { ReferenceImages } from './attachments.tsx'
 import { Feedback, FeedbackList, FeedbackRead, ReviewComposerContext } from './ui.tsx'
 import type { ReviewComposerValue } from './ui.tsx'

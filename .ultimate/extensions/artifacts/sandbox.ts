@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { posix } from 'node:path'
 import { html as htmlSpec, parse, serialize } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
-import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_HTML_BYTES } from '../artifacts/types.ts'
-import type { ArtifactSnapshot } from '../artifacts/types.ts'
+import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_HTML_BYTES } from './types.ts'
+import type { ArtifactSnapshot } from './types.ts'
 import { bridgeSource } from './bridge.ts'
 
 type Node = DefaultTreeAdapterMap['node']

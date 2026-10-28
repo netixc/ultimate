@@ -1,4 +1,4 @@
-import type { Artifact, LayoutPassInput } from '../artifacts/types.ts'
+import type { Artifact, LayoutPassInput } from './types.ts'
 
 /** Passive document returned by the native artifact loader; never insert srcdoc into the host DOM. */
 export type NativeDocument = {

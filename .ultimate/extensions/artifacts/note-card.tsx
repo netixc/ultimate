@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ReferenceImages } from './attachments.tsx'
-import type { TargetRect } from './types.ts'
+import type { TargetRect } from './viewer-types.ts'
 import type { ReviewDraft } from './ui.tsx'
 
 export function NoteCard({

@@ -1,7 +1,7 @@
 import { TriangleAlertIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { LayoutState } from '../artifacts/types.ts'
+import type { LayoutState } from './types.ts'
 import type { ReviewDraft } from './ui.tsx'
 
 const titles = {

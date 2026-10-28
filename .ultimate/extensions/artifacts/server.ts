@@ -24,6 +24,8 @@ import {
   List,
   Read,
   Feedback,
+  ReviewRead,
+  ReviewFeedback,
   FeedbackList,
   FeedbackRead,
   LayoutRead,
@@ -31,7 +33,8 @@ import {
   LayoutDismiss,
 } from './refs.ts'
 import type { Artifact, FeedbackBundle, FeedbackSummary, LayoutState } from './types.ts'
-import { FeedbackDestinationError } from './types.ts'
+import { FeedbackDestinationError, FeedbackTooLargeError } from './types.ts'
+import { buildDocument } from './sandbox.ts'
 import {
   layoutPassInput,
   layoutDismissInput,
@@ -66,8 +69,15 @@ export const Layout = defineDoc<{ artifacts: Record<string, LayoutState> }>({
 })
 export const docs = [Registry, Layout]
 // Human feedback and real browser measurements must not be fabricated by agent actions.
-export const userActions = ['feedback', 'layoutPass', 'layoutDismiss']
-export const sealedActions = ['feedback', 'feedbackRead', 'layoutPass', 'layoutDismiss']
+export const userActions = ['feedback', 'reviewFeedback', 'layoutPass', 'layoutDismiss']
+export const sealedActions = [
+  'feedback',
+  'reviewFeedback',
+  'feedbackRead',
+  'layoutPass',
+  'layoutDismiss',
+]
+export const pollActions = ['list', 'reviewRead', 'feedbackList', 'layoutRead']
 
 async function source(tx: Tx, host: ExtensionHost, owner: number) {
   const id = owner as ConversationId
@@ -404,40 +414,76 @@ function field(args: unknown, name: string): unknown {
     ? (args as Record<string, unknown>)[name]
     : undefined
 }
+// Call the backend directly: sealed actions must not expose private input through a nested service trace.
+// Each factory shares artifacts.operations, without retaining stale facet functions across reloads.
 export const actions = {
   publish: implementAction(Publish, (args, { host, conversationId }) => {
     if (conversationId === undefined) throw new Error('Publish requires the owner conversation')
-    return host.need(ArtifactsApi).publish(publishInput(args), conversationId, BACKGROUND_CONTEXT)
+    return artifacts(host).publish(publishInput(args), conversationId, BACKGROUND_CONTEXT)
   }),
-  list: implementAction(List, (_args, { host }) =>
-    host.need(ArtifactsApi).list(BACKGROUND_CONTEXT),
-  ),
+  list: implementAction(List, (_args, { host }) => artifacts(host).list(BACKGROUND_CONTEXT)),
   read: implementAction(Read, (args, { host }) =>
-    host.need(ArtifactsApi).read(artifactId(field(args, 'id')), BACKGROUND_CONTEXT),
+    artifacts(host).read(artifactId(field(args, 'id')), BACKGROUND_CONTEXT),
   ),
   feedback: implementAction(Feedback, (args, { host }) =>
-    host.need(ArtifactsApi).feedback(feedbackInput(args), BACKGROUND_CONTEXT),
+    artifacts(host).feedback(feedbackInput(args), BACKGROUND_CONTEXT),
   ),
+  reviewRead: implementAction(ReviewRead, async (args, { host }) => {
+    const parentOrigin = field(args, 'parentOrigin')
+    if (typeof parentOrigin !== 'string' || parentOrigin.length > 512)
+      throw new Error('Expected the viewer origin')
+    const origin = new URL(parentOrigin)
+    if (!['http:', 'https:'].includes(origin.protocol) || origin.origin !== parentOrigin)
+      throw new Error('Expected an HTTP(S) viewer origin without a path')
+    const knownHash = field(args, 'knownHash')
+    if (
+      knownHash !== undefined &&
+      (typeof knownHash !== 'string' || !/^[a-f0-9]{64}$/.test(knownHash))
+    )
+      throw new Error('Expected a content hash')
+    const snapshot = await artifacts(host).read(artifactId(field(args, 'id')), BACKGROUND_CONTEXT)
+    if (knownHash === snapshot.artifact.contentHash)
+      return {
+        unchanged: true as const,
+        artifact: snapshot.artifact,
+        sourceError: snapshot.sourceError,
+      }
+    return {
+      artifact: snapshot.artifact,
+      sourceError: snapshot.sourceError,
+      ...buildDocument(snapshot, parentOrigin),
+    }
+  }),
+  reviewFeedback: implementAction(ReviewFeedback, async (args, { host }) => {
+    try {
+      return await artifacts(host).feedback(feedbackInput(args), BACKGROUND_CONTEXT)
+    } catch (error) {
+      // These rejections precede persistence; uncertain failures still throw for exact retry.
+      if (error instanceof FeedbackTooLargeError)
+        return { rejected: 'too-large' as const, message: error.message }
+      if (error instanceof FeedbackDestinationError)
+        return { rejected: 'destination' as const, message: error.message }
+      throw error
+    }
+  }),
   feedbackList: implementAction(FeedbackList, (args, { host }) =>
-    host.need(ArtifactsApi).feedbackList(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
+    artifacts(host).feedbackList(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
   ),
   layoutRead: implementAction(LayoutRead, (args, { host }) =>
-    host.need(ArtifactsApi).layoutRead(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
+    artifacts(host).layoutRead(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
   ),
   layoutPass: implementAction(LayoutPass, (args, { host }) =>
-    host.need(ArtifactsApi).layoutPass(layoutPassInput(args), BACKGROUND_CONTEXT),
+    artifacts(host).layoutPass(layoutPassInput(args), BACKGROUND_CONTEXT),
   ),
   layoutDismiss: implementAction(LayoutDismiss, (args, { host }) =>
-    host.need(ArtifactsApi).layoutDismiss(layoutDismissInput(args), BACKGROUND_CONTEXT),
+    artifacts(host).layoutDismiss(layoutDismissInput(args), BACKGROUND_CONTEXT),
   ),
   feedbackRead: implementAction(FeedbackRead, (args, { host }) =>
-    host
-      .need(ArtifactsApi)
-      .feedbackRead(
-        artifactId(field(args, 'artifactId')),
-        artifactId(field(args, 'id')),
-        BACKGROUND_CONTEXT,
-      ),
+    artifacts(host).feedbackRead(
+      artifactId(field(args, 'artifactId')),
+      artifactId(field(args, 'id')),
+      BACKGROUND_CONTEXT,
+    ),
   ),
 }
 

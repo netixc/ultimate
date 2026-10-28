@@ -7,12 +7,12 @@ import react from '@vitejs/plugin-react'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
 import { browserBinary } from '../../extensions/browser/server.ts'
-import { buildDocument } from '../../.ultimate/extensions/native-artifacts/sandbox.ts'
+import { buildDocument } from '../../.ultimate/extensions/artifacts/sandbox.ts'
 import type {
   ArtifactAnchor,
   ArtifactSnapshot,
 } from '../../.ultimate/extensions/artifacts/types.ts'
-import type { NativeDocument } from '../../.ultimate/extensions/native-artifacts/types.ts'
+import type { NativeDocument } from '../../.ultimate/extensions/artifacts/viewer-types.ts'
 import { until } from '../helpers.ts'
 
 it('captures element and cross-node text targets, validates stale boundaries, and rejects forged messages', async () => {
@@ -64,7 +64,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
             return `
       import React from 'react';
       import {createRoot} from 'react-dom/client';
-      import {ArtifactFrame} from '/.ultimate/extensions/native-artifacts/viewer.tsx';
+      import {ArtifactFrame} from '/.ultimate/extensions/artifacts/viewer.tsx';
       const root = createRoot(document.getElementById('root'));
       window.received = []; window.statuses = []; window.errors = []; window.interactions = []; window.rects = []; window.passes = []; window.targetRects = []; window.ready = 0;
       window.props = {mode:'annotate',anchors:[],onTarget:(a,r)=>{window.received.push(a);window.targetRects.push(r)},onRect:r=>window.rects.push(r),onDiagnostics:p=>window.passes.push(p),onStatuses:s=>window.statuses.push(s),onError:e=>window.errors.push(e),onInteracting:a=>window.interactions.push(a),onReady:()=>window.ready++};

@@ -17,7 +17,6 @@ import { Subagents, Standing, SubagentsApi } from '../extensions/subagents/api.t
 import { submitInput } from '../server/submit.ts'
 import { send } from '../extensions/messages/send.ts'
 import artifactExtension, { Registry, actions } from '../.ultimate/extensions/artifacts/server.ts'
-import { actions as nativeActions } from '../.ultimate/extensions/native-artifacts/server.ts'
 import { ArtifactsApi, FeedbackTooLargeError } from '../.ultimate/extensions/artifacts/api.ts'
 import {
   ArtifactStorage,
@@ -159,6 +158,40 @@ async function fixture() {
   }
 }
 
+it('refreshes unchanged content without retransferring HTML, assets or the annotation channel', async () => {
+  const f = await fixture()
+  const artifact = await f.service.publish({ title: 'Review', path: 'page.html' }, f.owner, context)
+  const actionContext = {
+    host: f.host,
+    conversationId: f.owner,
+    signal: new AbortController().signal,
+    exec: async () => ({ stdout: '', stderr: '' }),
+  }
+  const snapshot = await actions.read({ id: artifact.id }, actionContext)
+  expect(snapshot.html).toBe('<h1>First</h1>')
+  const full = await actions.reviewRead(
+    { id: artifact.id, parentOrigin: 'https://review.example' },
+    actionContext,
+  )
+  expect(full).toHaveProperty('srcdoc', expect.stringContaining('First'))
+  expect(full).toHaveProperty('channel')
+  const unchanged = await actions.reviewRead(
+    {
+      id: artifact.id,
+      parentOrigin: 'https://review.example',
+      knownHash: snapshot.artifact.contentHash,
+    },
+    actionContext,
+  )
+  expect(unchanged).toEqual({
+    unchanged: true,
+    artifact: snapshot.artifact,
+    sourceError: undefined,
+  })
+  expect(unchanged).not.toHaveProperty('srcdoc')
+  expect(unchanged).not.toHaveProperty('channel')
+})
+
 it('rejects a landing log destination before retaining or admitting a new feedback batch', async () => {
   const f = await fixture()
   const artifact = await f.service.publish({ title: 'Review', path: 'page.html' }, f.owner, context)
@@ -178,7 +211,7 @@ it('rejects a landing log destination before retaining or admitting a new feedba
     'The landing log cannot receive artifact feedback',
   )
   expect(
-    await nativeActions.feedback(JSON.parse(JSON.stringify(input)), {
+    await actions.reviewFeedback(JSON.parse(JSON.stringify(input)), {
       host: f.host,
       conversationId: f.owner,
       signal: new AbortController().signal,

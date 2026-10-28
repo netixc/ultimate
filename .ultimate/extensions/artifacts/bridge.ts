@@ -1,5 +1,5 @@
-import type { ArtifactAnchor } from '../artifacts/types.ts'
-import type { LayoutDiagnostics, TargetRect, TargetStatus } from './types.ts'
+import type { ArtifactAnchor } from './types.ts'
+import type { LayoutDiagnostics, TargetRect, TargetStatus } from './viewer-types.ts'
 import { auditLayout } from './layout-audit.ts'
 
 export function decodeRect(value: unknown): TargetRect | undefined {
