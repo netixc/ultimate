@@ -53,13 +53,18 @@ async function fixture({ foreign = false } = {}) {
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
   await git(source, 'switch', '-c', 'preview-source')
-  // Initialize the pinned private source without network access; this clone's worktrees share its local URL.
+  // Advertise the detached pin from a fixture-owned branch, without changing the real source's refs.
+  const artifacts = join(root, 'artifacts-origin')
   await git(
-    source,
-    'config',
-    'submodule.artifacts.url',
+    root,
+    'clone',
+    '--no-hardlinks',
     join(checkout, '.ultimate/extensions/artifacts'),
+    artifacts,
   )
+  await git(artifacts, 'switch', '-c', 'fixture-pin')
+  // This clone's worktrees share the local URL; no private network access is needed.
+  await git(source, 'config', 'submodule.artifacts.url', artifacts)
   const initArtifacts = [
     '-c',
     'protocol.file.allow=always',
