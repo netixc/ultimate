@@ -182,7 +182,8 @@ lander's sidebar row shows the feature it lands or landed last.
      explicit-answer and recovered parent-report receipts must settle before the final decision; an idle child alone
      is not proof. Only those causal inputs belong to this finite boundary. Input receipts for runs already active at
      capture must also be answered: Stop or failure is not completion. These ordinary runs are never awaited.
-     New input outside the boundary, unanswered or failed callbacks, open outgoing questions and other work keep the branch open.
+     New input outside the boundary, unanswered or failed callbacks, open outgoing questions, another queued tip from
+     the same branch and other work keep the branch open.
      The final receipt/input check, `ConversationsApi.concludeIn` and the saved decision commit together, through
      the `workspaces.branches` extension point messages provides. The starter wakes with the same card only when
      the branch concluded. Otherwise it receives the card as a note, and the branch reports when its remaining work
@@ -209,7 +210,10 @@ or ended: when the harness opens, on each reload of the extension, and at once w
 faults. Pending reports run before that source's queue, without repeating Git, checks, push or the outcome event.
 They retain the complete outcome and the landing's reply boundary and final decision, so replacement tasks deliver
 that same decision without concluding or waking twice. Until a decision exists, the pending report owns the starter
-wake even if its task has faulted; a saved leave-open decision restores ordinary branch-answer routing.
+wake even if its task has faulted. Existing answer observers wait on that receipt rather than finishing as notes:
+a saved leave-open decision restores ordinary routing even when new work has already answered. Only the latest
+answer can wake the starter; earlier answers remain notes, and a later input or generation prevents an old answer
+from reporting after Stop or failure.
 A fault of the current code's own task waits for the next
 submit or open, so a deterministic fault does not loop.
 

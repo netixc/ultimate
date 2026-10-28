@@ -10,13 +10,14 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Task, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, SubmissionId, Task, TaskId, Tx } from '@earendil-works/pi-durable'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { abstract } from '../extensions/lineage/server.ts'
 import { Messages } from '../extensions/messages/api.ts'
+import { Started } from '../extensions/messages/addresses.ts'
 import { Subagents } from '../extensions/subagents/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
@@ -203,6 +204,20 @@ it.concurrent.each([
   const newWorkGate = Promise.withResolvers<void>()
   let newWorkHeld = false
   const recoveryContext = new AsyncLocalStorage<boolean>()
+  type ObservedRoute = {
+    inputs: SubmissionId[]
+    read: boolean
+    listening: boolean
+    finished: boolean
+  }
+  const routingContext = new AsyncLocalStorage<ObservedRoute>()
+  const observedRoutes = new Map<TaskId, ObservedRoute>()
+  let ordinaryInput: SubmissionId | undefined
+  let starter: ConversationId | undefined
+  const decisionGate = Promise.withResolvers<void>()
+  let holdDecision = false
+  const routedOrWaiting = (route: ObservedRoute) =>
+    route.finished || (route.read && route.listening)
   let parentHeld = false
   let replyHeld = 0
   let callbackHeld = false
@@ -213,8 +228,10 @@ it.concurrent.each([
     vi.spyOn(prepared.host, 'open').mockImplementation(async (...args) => {
       const opened = await open(...args)
       const subscribe = opened.harness.subscribeCommits.bind(opened.harness)
-      vi.spyOn(opened.harness, 'subscribeCommits').mockImplementation((listener) =>
-        subscribe((publication, ctx) =>
+      vi.spyOn(opened.harness, 'subscribeCommits').mockImplementation((listener) => {
+        const route = routingContext.getStore()
+        if (route) route.listening = true
+        return subscribe((publication, ctx) =>
           recoveryContext.run(
             publication.changes.some(
               (change) =>
@@ -225,8 +242,8 @@ it.concurrent.each([
             ),
             () => listener(publication, ctx),
           ),
-        ),
-      )
+        )
+      })
       const commit = opened.harness.commit.bind(opened.harness)
       vi.spyOn(opened.harness, 'commit').mockImplementation(async (change, ctx) => {
         // Async recovery inherits the subscriber's context. Wait BEFORE entering its transaction;
@@ -235,7 +252,10 @@ it.concurrent.each([
           recoveryHeld = true
           await awaitWithContext(recoveryGate.promise, ctx)
         }
-        return commit(change, ctx)
+        const result = await commit(change, ctx)
+        const route = routingContext.getStore()
+        if (route) route.read = true
+        return result
       })
       return opened
     })
@@ -297,6 +317,44 @@ it.concurrent.each([
         }),
       )
     }
+    const messages = prepared.host.registry.snapshot().extension('messages')!
+    prepared.host.registry.install(
+      defineExtension({
+        ...messages,
+        tasks: messages.tasks!.map((registration) => {
+          if (registration.definition.name !== 'board.route') return registration
+          const task = registration as unknown as Task<
+            { inputs: SubmissionId[] },
+            { phase: 'observe' },
+            null,
+            object
+          >
+          const observe = task.definition.phases.observe
+          return {
+            definition: {
+              ...task.definition,
+              phases: {
+                ...task.definition.phases,
+                observe: (...args: Parameters<typeof observe>) => {
+                  if (args[1].conversationId !== parent) return observe(...args)
+                  const route = {
+                    inputs: args[0].input.inputs,
+                    read: false,
+                    listening: false,
+                    finished: false,
+                  }
+                  observedRoutes.set(args[0].id, route)
+                  return routingContext.run(route, async () => {
+                    await observe(...args)
+                    route.finished = true
+                  })
+                },
+              },
+            },
+          }
+        }),
+      }),
+    )
     holdPhase(
       'messages',
       'board.delivery',
@@ -339,6 +397,8 @@ it.concurrent.each([
                       get(target, key) {
                         if (key === 'commit')
                           return async (...commitArgs: Parameters<typeof target.commit>) => {
+                            if (phase === 'report' && holdDecision)
+                              await awaitWithContext(decisionGate.promise, args[2])
                             await target.commit(...commitArgs)
                             // Observe a completed settlement decision, including one that stays pending.
                             if (phase === 'report') {
@@ -364,7 +424,7 @@ it.concurrent.each([
       const last = transcript.messages.findLast((message) => message.role !== 'system')!
       const text = textOf(last.content)
       if (text === 'New work') {
-        if (late === 'aborted') {
+        if (late === 'aborted' || late === 'answered') {
           newWorkHeld = true
           await Promise.race([
             newWorkGate.promise,
@@ -452,6 +512,14 @@ it.concurrent.each([
   )
   parent = await branchFrom(server, { from: 1, prompt: 'Land me' })
   let branch = await settled(server, parent)
+  if (late === 'answered') {
+    starter = (
+      await server.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+    ).id
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Started, parent)).by = starter!
+    }, context)
+  }
   try {
     await branch.submit({ type: 'input', content: 'Start child' }, context)
     await until(() => parentHeld)
@@ -499,6 +567,11 @@ it.concurrent.each([
         { type: 'input', content: 'New work', requestId: 'new-work' },
         context,
       )
+      if (late === 'answered') {
+        ordinaryInput = submission.id
+        await until(() => newWorkHeld)
+        newWorkGate.resolve()
+      }
       if (late === 'aborted') {
         await until(() => newWorkHeld)
         const run = (await server.harness.snapshot(LiveDoc, parent, context))!.run!.taskId
@@ -518,6 +591,14 @@ it.concurrent.each([
     )
 
     expect(stopped).toBe(late === 'aborted')
+    if (late === 'answered')
+      // Before releasing the internal chain, the new answer's real router has either
+      // completed (the bug) or read the receipt and subscribed for its landing decision.
+      await until(() =>
+        [...observedRoutes.values()].some(
+          (route) => route.inputs.includes(ordinaryInput!) && routedOrWaiting(route),
+        ),
+      )
 
     // Reopen the durable home with the callback still held. Setup runs before tasks resume,
     // so neither the reply nor the settlement can slip through the test gates on startup.
@@ -539,8 +620,31 @@ it.concurrent.each([
       'the callback answer still owes the parent its recovered report',
     ).not.toContain(parent)
     await until(() => callbackHeld)
+    holdDecision = late === 'answered'
     recoveryGate.resolve()
     callbackGate.resolve()
+    if (late === 'answered') {
+      await until(
+        async () =>
+          (await branch.context(context)).entries.filter(
+            (entry) => entry.kind === 'subagents.report',
+          ).length === 2,
+      )
+      await branch.waitForIdle(context)
+      await until(async () =>
+        (
+          await server.harness.commit(
+            (tx) => tx.scanTasks({ conversationId: parent, kind: 'board.route' }, 100),
+            context,
+          )
+        ).items.every(
+          (task) =>
+            task.state.status === 'terminal' ||
+            (!!observedRoutes.get(task.id) && routedOrWaiting(observedRoutes.get(task.id)!)),
+        ),
+      )
+    }
+    decisionGate.resolve()
     await until(() => landerEnded(server, landingTask))
     expect((await landerTask(server, landingTask))?.state).toMatchObject({
       status: 'terminal',
@@ -558,12 +662,35 @@ it.concurrent.each([
     ).entries
     expect(childEntries.filter((entry) => entry.kind === 'board.reply')).toHaveLength(1)
     expect((await concluded(server)).includes(parent)).toBe(late === 'none')
+    if (late === 'answered') {
+      const recipient = (await server.harness.conversation(starter!, context))!
+      await until(async () =>
+        (
+          await server.harness.commit(
+            (tx) => tx.scanTasks({ conversationId: parent, kind: 'board.route' }, 100),
+            context,
+          )
+        ).items.every((task) => task.state.status === 'terminal'),
+      )
+      await recipient.waitForIdle(context)
+    }
+    const starterEntries =
+      starter === undefined
+        ? []
+        : (await (await server.harness.conversation(starter, context))!.context(context)).entries
+    expect(
+      starterEntries.filter((entry) => entry.input && entry.kind === 'board.message'),
+    ).toHaveLength(late === 'answered' ? 1 : 0)
+    expect(
+      starterEntries.filter((entry) => entry.input && entry.kind === 'workspaces.lander-report'),
+    ).toHaveLength(0)
   } finally {
     parentGate.resolve()
     replyGate.resolve()
     recoveryGate.resolve()
     callbackGate.resolve()
     newWorkGate.resolve()
+    decisionGate.resolve()
   }
 })
 

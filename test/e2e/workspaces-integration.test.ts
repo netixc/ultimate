@@ -1,6 +1,7 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { cp, mkdir, readdir, readFile, writeFile, access, realpath, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -1194,6 +1195,31 @@ it.concurrent('keeps the starter wake with a faulted pending landing across a de
   const { f, id } = await concluding()
   const gate = Promise.withResolvers<void>()
   const observing = Promise.withResolvers<TaskId>()
+  const pendingRead = Promise.withResolvers<void>()
+  const inObserver = new AsyncLocalStorage<boolean>()
+  const transact = f.opened.harness.commit.bind(f.opened.harness)
+  const readSpy = vi.spyOn(f.opened.harness, 'commit').mockImplementation(async (change, ctx) => {
+    let read = false
+    const result = await transact(
+      (tx) =>
+        change(
+          new Proxy(tx, {
+            get(target, key) {
+              if (key === 'doc')
+                return (...args: Parameters<Tx['doc']>) => {
+                  if (args[0].definition.kind === Workspaces.definition.kind) read = true
+                  return target.doc(...args)
+                }
+              const value = Reflect.get(target, key) as unknown
+              return typeof value === 'function' ? value.bind(target) : value
+            },
+          }),
+        ),
+      ctx,
+    )
+    if (inObserver.getStore() && read) pendingRead.resolve()
+    return result
+  })
   const messages = f.prepared.registry.snapshot().extension('messages')!
   f.prepared.registry.install(
     defineExtension({
@@ -1211,7 +1237,7 @@ it.concurrent('keeps the starter wake with a faulted pending landing across a de
                   observing.resolve(args[0].id)
                   await gate.promise
                 }
-                await observe(...args)
+                await inObserver.run(true, () => observe(...args))
               },
             },
           },
@@ -1261,6 +1287,19 @@ it.concurrent('keeps the starter wake with a faulted pending landing across a de
     )
     expect((await index())!.pendingReports[submission].decision).toBeUndefined()
     gate.resolve()
+    // Wait for the actual observer's pending-report read, not merely entry into its held wrapper.
+    await pendingRead.promise
+    expect(
+      (await f.opened.harness.commit((tx) => tx.task(routing), context))!.state.status,
+    ).not.toBe('terminal')
+    expect((await index())!.pendingReports[submission].decision).toBeUndefined()
+    expect((await messageLog(f)).filter((message) => message.from === id)).toEqual([])
+    expect((await f.opened.root.context(context)).entries.filter((entry) => entry.input)).toEqual(
+      [],
+    )
+    readSpy.mockRestore()
+    await f.reopen()
+    await submitted(f, id)
     await until(
       async () =>
         (await f.opened.harness.commit((tx) => tx.task(routing), context))?.state.status ===
@@ -1269,8 +1308,6 @@ it.concurrent('keeps the starter wake with a faulted pending landing across a de
     await until(async () => (await messageLog(f)).some((message) => message.from === id))
     const update = (await messageLog(f)).find((message) => message.from === id)!
     expect(update.report).toBeUndefined()
-    await f.reopen()
-    await submitted(f, id)
     await until(async () => Object.keys((await index())!.pendingReports).length === 0)
     await f.opened.root.waitForIdle(context)
     const entries = (await f.opened.root.context(context)).entries
@@ -1286,8 +1323,107 @@ it.concurrent('keeps the starter wake with a faulted pending landing across a de
     )
   } finally {
     gate.resolve()
+    readSpy.mockRestore()
   }
 })
+it.concurrent('keeps a branch open until its last queued tip lands and wakes its starter only once', async () => {
+  const { f, id } = await concluding()
+  const workspace = (await f.service.get(id, context))!
+  const firstTip = await git(workspace.path, 'rev-parse', 'HEAD')
+  const reportHeld = Promise.withResolvers<void>()
+  const reportGate = Promise.withResolvers<void>()
+  const secondHeld = Promise.withResolvers<void>()
+  const secondGate = Promise.withResolvers<void>()
+  let secondSubmission: string | undefined
+  let firstReport = true
+  const task = f.service.Lander
+  f.prepared.registry.install(
+    defineExtension({
+      ...workspaceExtension(f.host),
+      tasks: [
+        ...(workspaceExtension(f.host).tasks ?? []).filter(
+          (item) => item.definition.name !== task.definition.name,
+        ),
+        {
+          definition: {
+            ...task.definition,
+            phases: {
+              ...task.definition.phases,
+              report: async (...args: Parameters<typeof task.definition.phases.report>) => {
+                if (firstReport) {
+                  firstReport = false
+                  reportHeld.resolve()
+                  await reportGate.promise
+                }
+                await task.definition.phases.report(...args)
+              },
+              land: async (...args: Parameters<typeof task.definition.phases.land>) => {
+                if (args[0].state.checkpoint.id === secondSubmission) {
+                  secondHeld.resolve()
+                  await secondGate.promise
+                }
+                await task.definition.phases.land(...args)
+              },
+            },
+          },
+        },
+      ],
+    }),
+  )
+  try {
+    const first = await f.service.submit(id, 'None', context)
+    await reportHeld.promise
+    const secondTip = await commit(workspace.path, 'second-tip.txt')
+    const second = await f.service.submit(id, 'None', context)
+    secondSubmission = second.id
+    expect(second.id).not.toBe(first.id)
+    expect(secondTip).not.toBe(firstTip)
+    expect(
+      (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue,
+    ).toMatchObject([{ id: second.id, conversationId: id, tip: secondTip, state: 'queued' }])
+    reportGate.resolve()
+    await secondHeld.promise
+    await f.opened.root.waitForIdle(context)
+    expect(await concludedIds(f)).not.toContain(id)
+    expect(
+      await f.opened.harness.commit(
+        (tx) => tx.submissionByRequest(ROOT_CONVERSATION_ID, `lander:${first.id}`),
+        context,
+      ),
+    ).toMatchObject({ type: 'write' })
+    const firstEntries = (await f.opened.root.context(context)).entries
+    const firstReports = firstEntries.filter((entry) => entry.kind === 'workspaces.lander-report')
+    expect(firstReports).toHaveLength(1)
+    expect(firstEntries.filter((entry) => entry.input)).toHaveLength(0)
+    expect(firstReports[0].data).toMatchObject({
+      id: first.id,
+      outcome: { outcome: 'landed', sha: firstTip },
+    })
+    secondGate.resolve()
+    expect(await submitted(f, id)).toHaveLength(2)
+    await f.opened.root.waitForIdle(context)
+    expect(await concludedIds(f)).toContain(id)
+    expect(
+      await f.opened.harness.commit(
+        (tx) => tx.submissionByRequest(ROOT_CONVERSATION_ID, `lander:${second.id}`),
+        context,
+      ),
+    ).toMatchObject({ type: 'input' })
+    const entries = (await f.opened.root.context(context)).entries
+    const reports = entries.filter((entry) => entry.kind === 'workspaces.lander-report')
+    expect(reports.map((entry) => entry.data)).toMatchObject([
+      { id: first.id, outcome: { outcome: 'landed', sha: firstTip } },
+      { id: second.id, outcome: { outcome: 'landed', sha: secondTip } },
+    ])
+    expect(entries.filter((entry) => entry.input).map((entry) => entry.kind)).toEqual([
+      'workspaces.lander-report',
+    ])
+  } finally {
+    reportGate.resolve()
+    secondGate.resolve()
+  }
+})
+
 it.concurrent('notes a clean landing without a branch run, concludes and releases it, and wakes its starter once across replay', async () => {
   const { f, id } = await concluding()
   const workspace = (await f.service.get(id, context))!

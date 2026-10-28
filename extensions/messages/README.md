@@ -63,8 +63,11 @@ conversation that started you is a note, and stopping with nothing under way is 
   still under way (no run or queued input in it or a subagent at any depth, no subagent report or waking `notify`
   on its way, no submission in the lander's queue or report phase, no reply-enabled message of its own still
   waiting), the answer goes to the starter as a one-way message with
-  `report: true`, which wakes it as a follow-up. While something is still under way it goes as a note: the branch
-  will run again when that work wakes it. A concluded branch's late final answer is also a note, since its landing
+  `report: true`, which wakes it as a follow-up. An undecided landing receipt keeps the existing observer waiting,
+  including across report faults and reopen. Once decided, routing checks again; only the latest answer can wake,
+  so completed new work is not stranded and multiple deferred answers do not each wake the starter. Other work still
+  under way makes an answer a note: the branch will run again when that work wakes it.
+  A concluded branch's late final answer is also a note, since its landing
   already woke the starter. A landing ends a branch's work without a report run: the lander settles its finite
   admitted internal reply chain before the final conclusion and wake decision (`extensions/workspaces/README.md`).
   This extension supplies the starter, remaining-work check and reply settlement through workspaces' extension points.

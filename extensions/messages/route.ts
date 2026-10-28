@@ -1,4 +1,5 @@
 /** `board.route`: a branch's final answers reach the conversation that started it. */
+import { awaitWithContext } from '@earendil-works/chord/context'
 import { defineTask, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
@@ -49,7 +50,7 @@ async function busy(tx: Tx, id: ConversationId) {
  * Whether branch `id` still has work under way that will wake it again: a run or queued input, a waking task, a
  * subagent at any depth that is busy, a submission the lander has not reported yet, or a reply-enabled message still
  * waiting on its answer. While the lander reports a landing it decides, once, whether the branch is done: it
- * concludes it and wakes the starter, or leaves it open to report when it stops. Until then a report waits as a note.
+ * concludes it and wakes the starter, or leaves it open to report when it stops. Until then its answer observer waits.
  */
 async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
   // A landing concludes the branch in the commit that ends its report and wakes the starter itself; an answer routed
@@ -57,12 +58,6 @@ async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promis
   if ((await host.need(ConversationsApi).concludedIn(tx)).has(id)) return true
   const index = await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)
   if (index.queue.some((item) => item.conversationId === id)) return true
-  // Finish removes the queue entry atomically with this receipt. It owns the wake even if
-  // its task faults before deciding; a saved leave-open decision gives normal routing back.
-  if (
-    Object.values(index.pendingReports).some((item) => item.conversationId === id && !item.decision)
-  )
-    return true
   return working(tx, id)
 }
 /**
@@ -121,38 +116,97 @@ export function route(host: ExtensionHost) {
         )
         const { by } = task.input
         const id = runtime.conversationId
-        const routed = await host.harness().commit(async (tx) => {
-          // A continued generation's answer is no run's final answer: only inputs it settled make one.
-          const answered = inputs.flatMap((input) =>
-            input?.type === 'input' && input.status === 'done' && input.answer === answer
-              ? [input.entry]
-              : [],
-          )
-          if (!answered.length) return undefined
-          for (const entryId of answered) {
-            const entry = await tx.entry(entryId)
-            // board.delivery returns the answer to the starter's reply-enabled message.
-            const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
-            if (entry?.kind === 'board.message' && data?.from === by && data.reply === true)
-              return undefined
-          }
-          const message = (await tx.entry(answer))?.model?.[0]
-          if (
-            message?.role !== 'assistant' ||
-            message.stopReason === 'error' ||
-            message.stopReason === 'aborted'
-          )
-            return undefined
-          const text = message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
-          return { text, report: !(await underway(host, tx, id)) }
-        }, ctx)
-        if (routed?.text.trim())
-          await send(host, id, { to: `#${by}`, text: routed.text, reply: false }, ctx, {
-            requestId: `route:${answer}`,
-            note: !routed.report,
-            report: routed.report,
+        const workspaces = host.need(WorkspacesApi).doc
+        for (;;) {
+          const changed = Promise.withResolvers<void>()
+          // The existing observer is the durable deferred answer receipt. Subscribe before
+          // reading the landing decision so neither a fault nor a fast decision loses its wake.
+          const unsubscribe = host.harness().subscribeCommits((publication) => {
+            if (
+              publication.changes.some(
+                (change) =>
+                  change.type === 'document' && change.record.kind === workspaces.definition.kind,
+              )
+            )
+              changed.resolve()
           })
-        await runtime.commit(() => terminal, ctx)
+          try {
+            const routed = await host.harness().commit(async (tx) => {
+              // A continued generation's answer is no run's final answer: only inputs it settled make one.
+              const answered = inputs.flatMap((input) =>
+                input?.type === 'input' && input.status === 'done' && input.answer === answer
+                  ? [input.entry]
+                  : [],
+              )
+              if (!answered.length) return undefined
+              for (const entryId of answered) {
+                const entry = await tx.entry(entryId)
+                // board.delivery returns the answer to the starter's reply-enabled message.
+                const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
+                if (entry?.kind === 'board.message' && data?.from === by && data.reply === true)
+                  return undefined
+              }
+              const message = (await tx.entry(answer))?.model?.[0]
+              if (
+                message?.role !== 'assistant' ||
+                message.stopReason === 'error' ||
+                message.stopReason === 'aborted'
+              )
+                return undefined
+              const text = message.content
+                .flatMap((p) => (p.type === 'text' ? [p.text] : []))
+                .join('')
+              if (!text.trim()) return undefined
+              const index = await tx.doc(workspaces, ROOT_CONVERSATION_ID)
+              if (
+                !(await host.need(ConversationsApi).concludedIn(tx)).has(id) &&
+                Object.values(index.pendingReports).some(
+                  (item) => item.conversationId === id && !item.decision,
+                )
+              )
+                return { waiting: true } as const
+              let report = !(await underway(host, tx, id))
+              // Several completed answers can wait on one decision. Only the latest can
+              // report; a later input (even if stopped) or generation makes the older one a note.
+              if (report) {
+                let cursor: Parameters<Tx['scanEntries']>[2]
+                do {
+                  const page = await tx.scanEntries(
+                    { conversationId: id, minEntryId: answer },
+                    100,
+                    cursor,
+                  )
+                  if (
+                    page.items.some(
+                      (entry) =>
+                        entry.id !== answer &&
+                        (entry.input || entry.model?.some((model) => model.role === 'assistant')),
+                    )
+                  ) {
+                    report = false
+                    break
+                  }
+                  cursor = page.next
+                } while (cursor !== undefined)
+              }
+              return { text, report }
+            }, ctx)
+            if (routed && 'waiting' in routed) {
+              await awaitWithContext(changed.promise, ctx)
+              continue
+            }
+            if (routed)
+              await send(host, id, { to: `#${by}`, text: routed.text, reply: false }, ctx, {
+                requestId: `route:${answer}`,
+                note: !routed.report,
+                report: routed.report,
+              })
+            await runtime.commit(() => terminal, ctx)
+            return
+          } finally {
+            unsubscribe()
+          }
+        }
       },
     },
     abort: (_task, runtime, ctx) =>

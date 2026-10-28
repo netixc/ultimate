@@ -898,8 +898,8 @@ export function createLander(
         )
         const starter = await after.starter(branch, context)
         // Decided once, with the conversation's state, in the commit that leaves this phase: input admitted after it
-        // resumes the branch, and a replay delivers what was decided. While this phase lasts, the branch's own report
-        // waits as a note (messages counts this phase as under way); once decided, a branch left open reports when it stops.
+        // resumes the branch, and a replay delivers what was decided. While this phase lasts, the branch's answer
+        // observer waits on the pending receipt; a branch left open can then report even if its new work already stopped.
         for (;;) {
           const changed = Promise.withResolvers<void>()
           // Subscribe before reading Pi receipts. Exact callbacks and their recovered Reporters
@@ -925,8 +925,11 @@ export function createLander(
                 waiting = true
                 return undefined
               }
-              const working = replies === 'unanswered' || (await after.working(tx, branch))
               const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+              const working =
+                replies === 'unanswered' ||
+                draft.queue.some((item) => item.conversationId === branch) ||
+                (await after.working(tx, branch))
               let concluded = false
               if (!working)
                 try {
