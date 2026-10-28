@@ -445,6 +445,42 @@ it('measures actual iframe geometry without flagging below-fold controls or inte
   )
 })
 
+it('keeps root-only non-rectangular clipping incomplete without inventing control findings', async () => {
+  await inFrame(
+    '<html style="clip-path:inset(0 0 90% 0)"><body style="margin:0;height:200px;padding-top:100px"><button>Save</button></body></html>',
+    async (page, frame, channel) => {
+      const geometry = await frame
+        .getByRole('button', { name: 'Save', exact: true })
+        .evaluate((button) => {
+          const rect = button.getBoundingClientRect()
+          return {
+            clipPath: getComputedStyle(document.documentElement).clipPath,
+            rootHeight: document.documentElement.getBoundingClientRect().height,
+            top: rect.top,
+            bottom: rect.bottom,
+            hitControl:
+              document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) ===
+              button,
+          }
+        })
+      expect(geometry.clipPath).toContain('inset(')
+      expect(geometry.top).toBeGreaterThan(geometry.rootHeight * 0.1)
+      expect(geometry.bottom).toBeLessThan(420)
+      expect(geometry.hitControl).toBe(false)
+      await until(async () =>
+        (await messages(page, channel)).some((message) => message.type === 'diagnostics'),
+      )
+      const observed = (await messages(page, channel)).find(
+        (message) => message.type === 'diagnostics',
+      )!
+      if (observed.type !== 'diagnostics') throw new Error('Missing measured diagnostics')
+      expect(observed.pass.findings).toEqual([])
+      expect(observed.pass.complete).toBe(false)
+      expect(observed.pass.error).toContain('non-rectangular')
+    },
+  )
+})
+
 it('reports a bounded incomplete pass rather than an all-clear for an oversized DOM', async () => {
   await inFrame('<span>content</span>'.repeat(2001), async (page, _frame, channel) => {
     await until(async () => (await messages(page, channel)).some((m) => m.type === 'diagnostics'))

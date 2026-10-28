@@ -233,6 +233,8 @@ function LoadedReview({
   const [layoutState, setLayoutState] = useState<LayoutState>()
   const currentChannel = useRef(document.channel)
   currentChannel.current = document.channel
+  // Serialize frame-local snapshots; a new document starts an independent queue.
+  const layoutQueue = useRef(Promise.resolve())
   const [checking, setChecking] = useState(true)
   const [layoutError, setLayoutError] = useState<string>()
   const lastPass = useRef<LayoutDiagnostics | undefined>(undefined)
@@ -242,6 +244,7 @@ function LoadedReview({
   useEffect(() => {
     setChecking(true)
     lastPass.current = undefined
+    layoutQueue.current = Promise.resolve()
   }, [document.channel])
   const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
@@ -284,43 +287,56 @@ function LoadedReview({
       setFrameError(undefined)
     }
   }
-  const diagnostics = async (pass: LayoutDiagnostics) => {
+  const diagnostics = (pass: LayoutDiagnostics) => {
     lastPass.current = pass
-    setChecking(true)
-    try {
-      const state = await api.action(LayoutPass, {
-        ...pass,
-        artifactId: artifact.id,
-        contentHash: artifact.contentHash,
-      })
+    const request = layoutQueue.current.then(async () => {
       if (currentChannel.current !== document.channel) return
-      setLayoutState(state)
-      setLayoutError(undefined)
-    } catch (failure) {
-      if (currentChannel.current === document.channel)
-        setLayoutError(`Couldn’t save layout check: ${errorMessage(failure)}`)
-    } finally {
-      if (currentChannel.current === document.channel) setChecking(false)
-    }
+      setChecking(true)
+      try {
+        const state = await api.action(LayoutPass, {
+          ...pass,
+          artifactId: artifact.id,
+          contentHash: artifact.contentHash,
+        })
+        if (currentChannel.current !== document.channel) return
+        setLayoutState(state)
+        setLayoutError(undefined)
+      } catch (failure) {
+        if (currentChannel.current === document.channel)
+          setLayoutError(`Couldn’t save layout check: ${errorMessage(failure)}`)
+      } finally {
+        if (currentChannel.current === document.channel) setChecking(false)
+      }
+    })
+    layoutQueue.current = request
+    return request
   }
-  const dismiss = async (issueId: string) => {
-    try {
-      const state = await api.action(LayoutDismiss, {
-        artifactId: artifact.id,
-        issueId,
-        contentHash: artifact.contentHash,
-      })
+  const dismiss = (issueId: string) => {
+    const request = layoutQueue.current.then(async () => {
       if (currentChannel.current !== document.channel) return
-      setLayoutState(state)
-      setLayoutError(undefined)
-      update((current) => ({
-        ...current,
-        selectedIssues: current.selectedIssues?.filter((id) => id !== issueId),
-      }))
-    } catch (failure) {
-      if (currentChannel.current === document.channel)
-        setLayoutError(`Couldn’t dismiss issue: ${errorMessage(failure)}`)
-    }
+      setChecking(true)
+      try {
+        const state = await api.action(LayoutDismiss, {
+          artifactId: artifact.id,
+          issueId,
+          contentHash: artifact.contentHash,
+        })
+        if (currentChannel.current !== document.channel) return
+        setLayoutState(state)
+        setLayoutError(undefined)
+        update((current) => ({
+          ...current,
+          selectedIssues: current.selectedIssues?.filter((id) => id !== issueId),
+        }))
+      } catch (failure) {
+        if (currentChannel.current === document.channel)
+          setLayoutError(`Couldn’t dismiss issue: ${errorMessage(failure)}`)
+      } finally {
+        if (currentChannel.current === document.channel) setChecking(false)
+      }
+    })
+    layoutQueue.current = request
+    return request
   }
   const sourceError = latest ? latest.sourceError : document.sourceError
   return (

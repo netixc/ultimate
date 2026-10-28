@@ -31,8 +31,8 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
   const material = Math.max(16, viewport.width * 0.02)
   const pageOverflow =
     Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - viewport.width
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT)
-  let node: Element | null = document.body
+  const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT)
+  let node: Element | null = document.documentElement
   let measured = 0
   let controls = 0
   let escaped: { element: Element; amount: number } | undefined

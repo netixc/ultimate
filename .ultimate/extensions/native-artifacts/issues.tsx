@@ -146,7 +146,12 @@ export function Issues({
                 <Button size="xs" variant="outline" onClick={() => reveal(issue.selector)}>
                   Reveal
                 </Button>
-                <Button size="xs" variant="ghost" onClick={() => dismiss(issue.id)}>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={loading}
+                  onClick={() => dismiss(issue.id)}
+                >
                   Dismiss
                 </Button>
               </div>
