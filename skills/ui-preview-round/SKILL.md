@@ -36,5 +36,7 @@ reference states, including narrow viewports, not just the new screen in isolati
    one), what changed, a short numbered "what to try" naming the conversation you seeded, and a `Decisions:` block
    (approve as is, or change something).
 6. **Iterate**: each change is a new commit and a new round; keep the same preview running.
-7. **On approval**: remove anything only the preview needed, `instance stop`, then `workspace submit` with the
-   divergence. Report the landing in your final answer.
+7. **On approval**: remove anything only the preview needed and `instance stop`. Before `workspace submit`, report
+   to @ultimate what changed, how you verified it and the divergence ("None" when it matches), then submit with that
+   divergence. The existing landing card reports success and normally concludes the branch without another run.
+   A failed submission wakes you to fix the cause in your workspace and submit again.

@@ -21,24 +21,30 @@ its `source` (`#conversation/entry`) is the starting point.
 
 The conversation may live in an earlier chapter: in codemode, try `ultimate.entries(id)` and then
 `ultimate.entries(id, {chapter})` for each chapter name from `ultimate.conversations` errors or the handoff.
-`ultimate.search('"id":<id>', {chapter})` finds its `lineage.branched` event: `from` (the root or parent), `at` (the
-entry in the starter that started it) and `intent` (the prompt's opening).
+Search `ultimate.search('"branch":<id>', {chapter})` for a stored `lineage.branched` entry with `data.branch === id`.
+Stored entries differ from the emitted event (`{id, from, at, intent}`): their data has `{branch, at, intent, from?}`.
+The fork source is `data.from ?? entry.conversationId`; `data.at` is the fork point in that source, not the requester's
+input. The root marker's visible text names the requester separately: `started by #<requester> from #<source>/<at>`.
+If it does not name one, find the branch call in stored history; do not assume the fork source requested the work.
 
 ## 3. From the intent to the decision
 
-Read the starter's entries just before `at` (`ultimate.entries(starter, {before: at + 1, limit: 40, chapter})`):
+Read the requester's entries around the branch's creation (`ultimate.entries(requester, {before, limit: 40, chapter})`);
+page back to its triggering input or recorded decision. Do not use the fork point as the requester's entry boundary.
 
-- a `pi.user` input: the user asked, quote it;
-- a question-card answer (`1a. …` lines): the user decided; name the question and the option;
-- a `dream.*` entry or a branch prompt saying "from dream session N": a dream proposed it; find the proposal and
-  the pass that found it (`subagents.report` of the `dream-pass`), and the user's approval of it;
-- a `goal` decision: @ultimate decided on a hands-off goal; quote the recorded reason;
-- a message from another project's @ultimate: name the project and its words.
+- an actual user input or question-card answer (`1a. …` lines): quote the request, or name the question and option;
+  check provenance, since a branch's agent-supplied prompt can also be stored as `pi.user`;
+- a `dream.*` entry or a branch prompt saying "from dream session N": find the proposal and pass report
+  (`subagents.report` of the `dream-pass`), then trace any implementation approval to its recorded source;
+- an automation trigger or `goal` decision: quote the recorded trigger or reason and its authorized scope;
+- a message from another project's @ultimate: follow it to the originating input or recorded automatic decision.
 
-Repeat step 2–3 when the starter is itself a coordinator, until you reach one of these.
+Repeat steps 2–3 through agent requests until you reach the actual user input or recorded automatic decision.
+A recommended pick, tally or branch prompt alone is not user approval. A batch or indirect go counts only when its
+recorded source covers this work; if that source cannot be found, report the approval as unproven.
 
 ## 4. Report
 
 One short chain, newest to oldest, each step with its `#conversation/entry` link or sha, then one plain line:
-who decided and why. Say plainly when the approval was indirect (a batch "do all of it", a recommended pick taken
-as a yes) — that is usually why nobody remembers asking for it.
+who decided and why. Distinguish the requester from the fork source and point. If approval was indirect, cite the
+recorded batch or delegated go and its scope; never turn a recommended pick into a yes.
