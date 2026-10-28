@@ -8,7 +8,10 @@
   },
   "isolates": {
     "worktree": {
-      "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
+      "setup": [
+        "git submodule update --init -- .ultimate/extensions/artifacts",
+        "pnpm install --frozen-lockfile --prefer-offline"
+      ]
     }
   },
   "lander": {
