@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterAll, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -33,20 +33,35 @@ function textOf(content: unknown): string {
         .flatMap((p) => (p.type === 'text' ? [p.text!] : []))
         .join('')
 }
-async function fixture(onRequest?: (text: string, home: string) => Promise<void>) {
+async function source(parent: string) {
+  const root = await sourceCopy(parent)
+  // The repository's coordinator overlay pins a model no test can run; tests pin their own.
+  await rm(join(root, '.ultimate/agents/coordinator.md'))
+  await writeFile(
+    join(root, '.ultimate/settings.json'),
+    JSON.stringify({ summaryModel: 'unavailable/test' }),
+  )
+  return root
+}
+let sharedRoot: string
+beforeAll(async () => {
+  sharedRoot = await source(await temp())
+})
+async function fixture({
+  onRequest,
+  editSource = false,
+}: {
+  onRequest?: (text: string, home: string) => Promise<void>
+  editSource?: boolean
+} = {}) {
   const home = await temp('ultimate-agent-')
   homes.push(home)
-  const root = await sourceCopy(home)
-  // The repository's coordinator overlay pins a Claude Code model no test can run; tests pin their own.
-  await rm(join(root, '.ultimate/agents/coordinator.md'))
+  // User files and durable homes stay private; only tests editing built-ins or project overlays need a source copy.
+  const root = editSource ? await source(home) : sharedRoot
   await mkdir(join(home, '.ultimate/agents'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/agents/dice.md'),
     '---\nname: dice\ndescription: Dice\nresident: true\ntools: [message]\n---\nAnswer concisely.',
-  )
-  await writeFile(
-    join(root, '.ultimate/settings.json'),
-    JSON.stringify({ summaryModel: 'unavailable/test' }),
   )
   // @ultimate's definition names web_search and web_fetch, which come with the default-off parallel.
   await writeFile(
@@ -176,7 +191,7 @@ it.concurrent('has no lineage action that starts a branch without routing its an
 })
 
 it.concurrent('starts a lineage branch with a message input and caller attribution, returns its answer, and selects roots', async () => {
-  const f = await fixture()
+  const f = await fixture({ editSource: true })
   await seedTally(f.server.harness)
   const ultimate = await f.subagents.standing('ultimate', context)
   // A project overlay pins the coordinator's model; `max` exceeds what the model supports and clamps to `high`. Its
@@ -342,12 +357,14 @@ it.concurrent('refreshes standing definitions for numeric-address deliveries', a
 })
 
 it.concurrent('refreshes standing definitions before delivering automatic replies', async () => {
-  const f = await fixture(async (text, home) => {
-    if (text.startsWith('Message from') && text.includes('\nRoll after edit\n'))
-      await writeFile(
-        join(home, '.ultimate/agents/ultimate.md'),
-        (await readFile(resolve('agents/ultimate.md'), 'utf8')) + '\nEdited reply recipient.',
-      )
+  const f = await fixture({
+    onRequest: async (text, home) => {
+      if (text.startsWith('Message from') && text.includes('\nRoll after edit\n'))
+        await writeFile(
+          join(home, '.ultimate/agents/ultimate.md'),
+          (await readFile(resolve('agents/ultimate.md'), 'utf8')) + '\nEdited reply recipient.',
+        )
+    },
   })
   const ultimate = await f.subagents.standing('ultimate', context)
   await ask(f.server, ultimate, 'SEND ' + JSON.stringify({ to: '@dice', text: 'Roll after edit' }))
@@ -423,7 +440,7 @@ async function agentInstructions(f: Awaited<ReturnType<typeof fixture>>, id: Con
 }
 
 it.concurrent('re-applies an updated @ultimate definition on a typed input and notes changed instructions once', async () => {
-  const f = await fixture()
+  const f = await fixture({ editSource: true })
   const ultimate = await f.subagents.standing('ultimate', context)
   const notes = async () =>
     (await entries(f.server, ultimate)).filter((entry) => entry.kind === 'prompt.build')
