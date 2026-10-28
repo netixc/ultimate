@@ -1,3 +1,5 @@
+# The install hook initializes the pinned source even when dependencies are already current.
+optimisticRepeatInstall: false
 allowBuilds:
   '@google/genai': false
   esbuild: true

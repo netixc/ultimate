@@ -7,12 +7,19 @@ notes, deferred roadmap and all nine synthetic test suites live in that reposito
 
 ## Worktrees and checks
 
-A new worktree, and the lander's merged-result checkout, use the existing `isolates.worktree.setup` commands:
+Worktree setup keeps its existing command, `pnpm install --frozen-lockfile --prefer-offline`.
+The host package's `pnpm:devPreinstall` hook runs exactly:
 
 ```sh
 git submodule update --init -- .ultimate/extensions/artifacts
-pnpm install --frozen-lockfile --prefer-offline
 ```
+
+This matters on the first conversion: the lander reads setup settings from the still-old live host, but installs
+the **merged checkout's** package. Its existing install command therefore initializes the merged pin without
+changing or activating the live source. Publish the source pin before submitting that gate. Do not use
+`--ignore-scripts` for this setup; a missing source then fails checks rather than silently dropping tests.
+`optimisticRepeatInstall: false` prevents pnpm's warm-cache shortcut from skipping this hook. Neither dependency
+versions nor the frozen lockfile change.
 
 The submodule uses existing Git authentication. Access to the public host does not grant access to private source;
 request repository read access through the normal Git workflow if initialization fails. Do not add a PAT to source,
@@ -26,6 +33,19 @@ a host feature branch. Run `pnpm check` and the artifact suites there, plus the 
 `git submodule update --remote`: the host owns the exact pin. The source's standalone CI pins an earlier, published
 host preparation SHA with no submodule, avoiding circular unpublished pins. Keep that host commit reachable.
 The full bootstrap publication order is in the submodule's `docs/development.md`.
+
+Worktree removal uses the existing project `isolates.worktree.remove` hook. The repository-specific script refuses
+modified/untracked source (including nested changes hidden by Git ignore settings), a different nested HEAD,
+ignored local files inside the source, or local branches/tags/reflog history absent from fetched `origin` refs.
+Only a validated initialized submodule uses one `git worktree remove --force`, because Git refuses ordinary removal
+for that layout even when clean; a locked worktree remains protected. Parent ignored build/install files retain
+ordinary Git removal semantics. Workspaces owns the source queue and busy checks; never run removal on an active
+editor or an unrelated checkout.
+
+The old live host also lacks this remove hook on the first conversion. Keep an initialized first-gate checkout if
+a failure/abandonment occurs before the host advances; do not force its cleanup. After integration the new hook can
+release it, or deliberately invoke the reviewed script from the verified branch against that registered, idle
+checkout. Passing checks do not authorize removal of existing unrelated worktrees or retained instance data.
 
 ## Live activation is a separate step
 
