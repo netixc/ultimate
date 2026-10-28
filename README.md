@@ -17,4 +17,4 @@ Archiving does not authorize deleting files, importing old material automaticall
 
 ## Index
 
-No entries yet. Add a relative link, date, status and one-line description for each entry.
+- 2026-10-28 — [Moshi local voice trial](ideas/2026-10-28-moshi/README.md) — `gestopt`: cancelled standalone speech experiment; synthetic measurements, failures and bounded-pipeline lessons, not a shipped or human-approved trial.
