@@ -295,6 +295,47 @@ it('keeps hover and locked image boundaries visible inside a clipping ancestor w
   )
 })
 
+it.each([
+  {
+    kind: 'a scaled wrapper above clipping',
+    html: '<div style="width:100px;transform:scale(2);transform-origin:0 0"><div style="overflow:hidden;width:100px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></div></div>',
+  },
+  {
+    kind: 'a display:contents ancestor',
+    html: '<div style="display:contents;overflow:hidden;width:100px;height:30px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></div>',
+  },
+  {
+    kind: 'an ordinary inline ancestor',
+    html: '<span style="overflow:hidden;width:100px;height:30px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></span>',
+  },
+])('omits unsupported clipping findings through $kind', async ({ html }) => {
+  await inFrame(`<style>body{margin:0}</style>${html}`, async (page, frame, channel) => {
+    const button = frame.getByRole('button', { name: 'Fits', exact: true })
+    expect(
+      await button.evaluate((element) => {
+        const r = element.getBoundingClientRect()
+        return [
+          [r.left + 0.5, r.top + 0.5],
+          [r.right - 0.5, r.top + 0.5],
+          [r.left + 0.5, r.bottom - 0.5],
+          [r.right - 0.5, r.bottom - 0.5],
+        ].every(([x, y]) => document.elementFromPoint(x, y) === element)
+      }),
+    ).toBe(true)
+    await button.click()
+    await until(async () =>
+      (await messages(page, channel)).some((message) => message.type === 'diagnostics'),
+    )
+    const observed = (await messages(page, channel))
+      .filter((message) => message.type === 'diagnostics')
+      .at(-1)!
+    if (observed.type !== 'diagnostics') throw new Error('Missing measured diagnostics')
+    expect(observed.pass.findings).toEqual([])
+    expect(observed.pass.complete).toBe(false)
+    expect(observed.pass.error).toBeTruthy()
+  })
+})
+
 it('does not label a reachable viewport-fixed control unreachable through an ordinary clipping ancestor', async () => {
   await inFrame(
     `<style>body{margin:0}</style><div style="overflow:hidden;width:100px;height:30px"><button style="position:fixed;left:200px;top:100px;width:100px;height:30px">Reachable</button></div>`,

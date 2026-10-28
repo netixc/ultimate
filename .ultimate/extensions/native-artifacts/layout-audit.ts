@@ -78,6 +78,8 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
         }
         let xScrollable = false
         let yScrollable = false
+        let clippingRegion = false
+        const candidates: LayoutDiagnostics['findings'] = []
         let xEnvelope = { left: rect.left, right: rect.right }
         let yEnvelope = { top: rect.top, bottom: rect.bottom }
         let xClipped = false
@@ -92,7 +94,6 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
         while (ancestor) {
           if (++depth > 32) {
             incomplete('Some layout ancestor chains exceed 32 elements.')
-            horizontalEscape = 0
             break
           }
           const parentStyle = getComputedStyle(ancestor)
@@ -104,12 +105,22 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
           const cy =
             clipped(parentStyle.overflowY) ||
             (['auto', 'scroll'].includes(parentStyle.overflowY) && ancestor.clientHeight === 0)
+          if ((cx || cy || sx || sy) && ['contents', 'inline'].includes(parentStyle.display)) {
+            incomplete('Non-box or inline clipping regions were not measured.')
+            break
+          }
+          clippingRegion ||= cx || cy || sx || sy
           if (
-            (cx || cy || sx || sy) &&
-            (parentStyle.transform !== 'none' || parentStyle.zoom !== '1')
+            clippingRegion &&
+            (parentStyle.transform !== 'none' ||
+              parentStyle.scale !== 'none' ||
+              parentStyle.rotate !== 'none' ||
+              parentStyle.translate !== 'none' ||
+              parentStyle.perspective !== 'none' ||
+              parentStyle.offsetPath !== 'none' ||
+              parentStyle.zoom !== '1')
           ) {
             incomplete('Transformed or zoomed clipping regions were not measured.')
-            horizontalEscape = 0
             break
           }
           const parentRect = ancestor.getBoundingClientRect()
@@ -126,7 +137,6 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
               (cy && Math.max(box.top - yEnvelope.top, yEnvelope.bottom - box.bottom) >= 4))
           ) {
             incomplete('Positioned descendants crossing a clipping region were not measured.')
-            horizontalEscape = 0
             break
           }
           if (sx) {
@@ -155,7 +165,7 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
               if (reachable && !excluded) return
               const amount = Math.max(0, lower - start, end - upper)
               if (amount < 4) return
-              add({
+              candidates.push({
                 rule: excluded ? 'unreachable-control' : 'clipped-control',
                 selector: selector(element),
                 axis,
@@ -176,13 +186,17 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
           positioned ||= parentStyle.position === 'absolute' || parentStyle.position === 'fixed'
           ancestor = ancestor.parentElement
         }
-        if (
-          pageOverflow > material &&
-          horizontalEscape > material &&
-          !xClipped &&
-          (!escaped || horizontalEscape > escaped.amount)
-        )
-          escaped = { element, amount: horizontalEscape }
+        // A higher ancestor can invalidate earlier clip measurements. Publish only after the whole bounded chain.
+        if (!ancestor) {
+          for (const finding of candidates) add(finding)
+          if (
+            pageOverflow > material &&
+            horizontalEscape > material &&
+            !xClipped &&
+            (!escaped || horizontalEscape > escaped.amount)
+          )
+            escaped = { element, amount: horizontalEscape }
+        }
       }
       node = walker.nextNode() as Element | null
     }

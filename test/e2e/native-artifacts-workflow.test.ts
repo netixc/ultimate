@@ -120,6 +120,8 @@ it('queues element, text, images and real issue fixes without waking the maker u
     await page.getByRole('button', { name: /Issues/ }).click()
     const issues = page.locator('[data-artifact-issues]')
     await issues.getByText('Page extends horizontally', { exact: true }).waitFor()
+    // Like the phone sheet below, paint the overlay above the iframe before its first pointer.
+    await issues.screenshot()
     await issues.getByRole('checkbox', { name: /^Select all/ }).check()
     await issues.getByRole('button', { name: 'Queue selected fixes', exact: true }).click()
     expect(feedbackCalls).toBe(0)
