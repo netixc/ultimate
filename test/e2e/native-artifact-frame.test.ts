@@ -295,6 +295,34 @@ it('keeps hover and locked image boundaries visible inside a clipping ancestor w
   )
 })
 
+it('does not label a reachable viewport-fixed control unreachable through an ordinary clipping ancestor', async () => {
+  await inFrame(
+    `<style>body{margin:0}</style><div style="overflow:hidden;width:100px;height:30px"><button style="position:fixed;left:200px;top:100px;width:100px;height:30px">Reachable</button></div>`,
+    async (page, frame, channel) => {
+      const button = frame.getByRole('button', { name: 'Reachable', exact: true })
+      expect(
+        await button.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          return (
+            document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === element
+          )
+        }),
+      ).toBe(true)
+      await button.click()
+      await until(async () =>
+        (await messages(page, channel)).some((message) => message.type === 'diagnostics'),
+      )
+      const observed = (await messages(page, channel))
+        .filter((message) => message.type === 'diagnostics')
+        .at(-1)!
+      if (observed.type !== 'diagnostics') throw new Error('Missing measured diagnostics')
+      expect(observed.pass.findings).toEqual([])
+      expect(observed.pass.complete).toBe(false)
+      expect(observed.pass.error).toContain('clipping')
+    },
+  )
+})
+
 it('measures actual iframe geometry without flagging below-fold controls or intentional scrollers, then rechecks details', async () => {
   await inFrame(
     `<style>body{margin:0}.clip{overflow:hidden;width:100px;height:30px}.cut{display:block;width:150px;margin-left:80px}.scroll{overflow:auto;width:100px;height:40px}.inside{width:600px;height:30px}#reachable{margin-left:400px}#below{margin-top:800px}#wide{width:900px;height:10px}#change{width:20px;height:20px}#change:checked{width:200px}</style>

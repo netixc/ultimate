@@ -16,7 +16,7 @@ The note card offers **Attach image**, **Cancel**, and **Queue**. Queue adds an 
 
 ## Measured layout issues
 
-The Issues count comes from stored findings, never sample data. The bridge checks two families only: material page horizontal overflow and clipped/unreachable controls. Each finding carries its actual content-frame viewport, revision, rule, selector, axis and measured overflow. Incomplete checks remain visibly incomplete; zero findings is not a full layout or accessibility review.
+The Issues count comes from stored findings, never sample data. The bridge checks two families only: material page horizontal overflow and clipped/unreachable controls. Each finding carries its actual content-frame viewport, revision, rule, selector, axis and measured overflow. Incomplete checks remain visibly incomplete; zero findings is not a full layout or accessibility review. When fixed or absolutely positioned descendants cross a clipping ancestor, the check stays incomplete rather than guessing whether that ancestor clips them.
 
 **Reveal** only highlights and scrolls to the selector. **Dismiss** dismisses an observation for the displayed revision. **Select all** and individual selection are tab-local. **Queue selected fixes** creates one ordinary draft note containing `layoutIssueIds`; it does not send or mark issues fixed. A batch can reference at most 50 unique issues. The backend attaches immutable observation context to admitted feedback. Only a complete newer-content measurement at the same exact viewport can resolve an issue automatically.
 

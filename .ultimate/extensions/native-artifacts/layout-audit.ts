@@ -87,6 +87,7 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
           rect.right + scrollX - viewport.width,
         )
         let ancestor = element.parentElement
+        let positioned = style.position === 'absolute' || style.position === 'fixed'
         let depth = 0
         while (ancestor) {
           if (++depth > 32) {
@@ -117,6 +118,16 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
             top: parentRect.top + ancestor.clientTop,
             right: parentRect.left + ancestor.clientLeft + ancestor.clientWidth,
             bottom: parentRect.top + ancestor.clientTop + ancestor.clientHeight,
+          }
+          // Out-of-flow descendants can escape ordinary ancestor clipping. Their containing blocks are not resolved here.
+          if (
+            positioned &&
+            ((cx && Math.max(box.left - xEnvelope.left, xEnvelope.right - box.right) >= 4) ||
+              (cy && Math.max(box.top - yEnvelope.top, yEnvelope.bottom - box.bottom) >= 4))
+          ) {
+            incomplete('Positioned descendants crossing a clipping region were not measured.')
+            horizontalEscape = 0
+            break
           }
           if (sx) {
             xScrollable = true
@@ -162,6 +173,7 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
             )
             check('vertical', cy, yScrollable, yEnvelope.top, yEnvelope.bottom, box.top, box.bottom)
           }
+          positioned ||= parentStyle.position === 'absolute' || parentStyle.position === 'fixed'
           ancestor = ancestor.parentElement
         }
         if (
