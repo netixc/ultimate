@@ -22,6 +22,7 @@ import { projectSettings } from '../../server/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
+import type { TailscaleService } from '../../extensions/tailscale/api.ts'
 import { setAutomaticSummaries } from '../../extensions/conversations/summary.ts'
 import { setStanding } from '../../extensions/conversations/server.ts'
 import { apis, attach, temp, removeTemp, until } from '../helpers.ts'
@@ -298,7 +299,8 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     expect((await f.list()).every((preview) => !('tailnet' in preview))).toBe(true)
     f.services.set('tailscale', {
       status: () => ({ state: 'ready', url: 'https://rog.example.ts.net:4747', allow: [] }),
-    })
+      peerOnline: async () => ({}),
+    } satisfies TailscaleService)
     expect(
       Object.fromEntries((await f.list()).map((preview) => [preview.id, preview.tailnet])),
     ).toEqual({
