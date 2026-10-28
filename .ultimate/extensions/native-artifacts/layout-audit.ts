@@ -37,6 +37,9 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
   let controls = 0
   let escaped: { element: Element; amount: number } | undefined
   try {
+    const rootStyle = getComputedStyle(document.documentElement)
+    const bodyOverflowPropagates =
+      rootStyle.overflowX === 'visible' && rootStyle.overflowY === 'visible'
     while (node) {
       if (++measured > 2000) {
         incomplete('The layout pass reached its 2,000-element limit.')
@@ -105,6 +108,14 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
           const cy =
             clipped(parentStyle.overflowY) ||
             (['auto', 'scroll'].includes(parentStyle.overflowY) && ancestor.clientHeight === 0)
+          if (
+            (cx || cy || sx || sy) &&
+            (ancestor === document.documentElement ||
+              (ancestor === document.body && bodyOverflowPropagates))
+          ) {
+            incomplete('Viewport overflow propagation was not measured.')
+            break
+          }
           if ((cx || cy || sx || sy) && ['contents', 'inline'].includes(parentStyle.display)) {
             incomplete('Non-box or inline clipping regions were not measured.')
             break

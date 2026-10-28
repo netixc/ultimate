@@ -305,6 +305,14 @@ it.each([
     html: '<div style="width:100px;height:40px;overflow:clip;overflow-clip-margin:40px"><button style="display:block;width:120px;height:20px;padding:0;border:0">Fits</button></div>',
   },
   {
+    kind: 'viewport-propagated body overflow',
+    html: '<style>html{overflow:visible}body{width:100px;overflow:hidden}</style><button style="display:block;width:120px;height:30px;padding:0;border:0">Fits</button>',
+  },
+  {
+    kind: 'viewport overflow on the root',
+    html: '<style>html{overflow:hidden;margin-left:100px;width:100px}</style><button style="display:block;position:relative;left:-60px;width:120px;height:30px;padding:0;border:0">Fits</button>',
+  },
+  {
     kind: 'a display:contents ancestor',
     html: '<div style="display:contents;overflow:hidden;width:100px;height:30px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></div>',
   },
