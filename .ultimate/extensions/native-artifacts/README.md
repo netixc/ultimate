@@ -8,7 +8,7 @@ With **Annotate** on, hovering marks a target without opening an editor. Click a
 
 The note card offers **Attach image**, **Cancel**, and **Queue**. Queue adds an ordinary unsent draft; it never sends or wakes the maker. Cancel discards just that unfinished note and its images. Queued notes remain editable in the right panel. Each note can have its own reference images, and general feedback can have general references. All pickers share the same limit: **four** decoded PNG, JPEG or WebP images totaling **8 MiB** across the batch. Encoded JSON size is checked before freezing a request.
 
-**Send to Agent**, in the right-side composer, is the only admission action. It calls the durable Feedback action, not ordinary SDK chat submission. The composer replacement is scoped by local React context; other Ultimate conversations keep their normal composer. The review conversation also uses `ComposerRedirect` to reject ordinary admission if the SDK ever falls back to its default composer. Enter and Ctrl+Enter do not send the review batch. **Send to conversation** is editable and changes the real transcript shown in the panel.
+**Send to Agent**, in the right-side composer, is the only admission action. The model-free landing log keeps its read-only banner even as a review destination; choose another conversation to send, without losing draft notes or images. It calls the durable Feedback action, not ordinary SDK chat submission. The composer replacement is scoped by local React context; other Ultimate conversations keep their normal composer. The review conversation also uses `ComposerRedirect` to reject ordinary admission if the SDK ever falls back to its default composer. Enter and Ctrl+Enter do not send the review batch. **Send to conversation** is editable and changes the real transcript shown in the panel.
 
 **Receipts** opens saved feedback and actual delivery routes. It polls summaries only while open. Image bytes load only when a batch's details are explicitly expanded; closing details releases them. It shows the latest 50 batches without deleting older feedback. Receipts distinguish **Saved · delivery pending** from **Queued to inbox**, show the submission ID and actual reroute, and never claim the maker has read or fixed anything.
 
@@ -34,7 +34,7 @@ The shared backend owns validation, snapshots, storage and delivery. `server.ts`
 
 - `list(null)` → `Artifact[]`.
 - `read({ id, parentOrigin, knownHash? })` → `NativeDocument` or `{ unchanged: true, artifact, sourceError? }`.
-- `feedback(FeedbackInput)` → one durable `FeedbackBundle`, or `{ rejected: 'too-large', message }` before persistence/admission; browser-only.
+- `feedback(FeedbackInput)` → one durable `FeedbackBundle`, or `{ rejected: 'too-large' | 'destination', message }` before persistence/admission; browser-only.
 - `feedbackList({ artifactId })` → newest 50 `FeedbackSummary` records, without image bytes.
 - `feedbackRead({ artifactId, id })` → one full batch for explicitly expanded receipt details.
 - `layoutRead({ artifactId })` → `LayoutState`.

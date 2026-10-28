@@ -31,6 +31,7 @@ import {
   LayoutDismiss,
 } from './refs.ts'
 import type { Artifact, FeedbackBundle, FeedbackSummary, LayoutState } from './types.ts'
+import { FeedbackDestinationError } from './types.ts'
 import {
   layoutPassInput,
   layoutDismissInput,
@@ -296,12 +297,17 @@ export function artifacts(
             throw new Error('Feedback requestId conflicts with a different payload')
         } else {
           const target = input.recipientConversation as ConversationId
-          const active = await commit(
-            ctx,
-            async (tx) =>
+          const active = await commit(ctx, async (tx) => {
+            const index = await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)
+            if (Object.values(index.landerConversations).includes(target))
+              throw new FeedbackDestinationError(
+                'The landing log cannot receive artifact feedback. Choose another conversation; your drafts are unchanged.',
+              )
+            return (
               !!(await tx.conversation(target)) &&
-              !(await host.need(ConversationsApi).concludedIn(tx)).has(target),
-          )
+              !(await host.need(ConversationsApi).concludedIn(tx)).has(target)
+            )
+          })
           const routedTo = active ? target : await host.need(SubagentsApi).standing('ultimate', ctx)
           const issueIds = input.notes.flatMap((note) => note.layoutIssueIds ?? [])
           const observed = feedbackLayoutIssues(

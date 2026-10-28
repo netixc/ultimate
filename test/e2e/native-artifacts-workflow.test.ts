@@ -1,12 +1,14 @@
 import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { configure } from '@earendil-works/pi-durable'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
 import { browserBinary } from '../../extensions/browser/server.ts'
 import { context } from '../../server/harness.ts'
+import { git } from '../../lib/git.ts'
+import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
 import type { FeedbackBundle } from '../../.ultimate/extensions/artifacts/types.ts'
 import { fauxServer, post, temp, until } from '../helpers.ts'
 
@@ -30,6 +32,24 @@ it('queues element, text, images and real issue fixes without waking the maker u
     env: { ...process.env, TMPDIR: undefined },
   })
   try {
+    await git(server.host.projectRoot, 'init')
+    await git(
+      server.host.projectRoot,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'Initial commit',
+    )
+    expect(
+      (await post(server, '/api/extensions/workspaces/actions/isolation', { args: null })).status,
+    ).toBe(200)
+    const index = await server.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    const lander = Object.values(index!.landerConversations)[0]
+    expect(lander).toBeTypeOf('number')
     const owner = await server.harness.createConversation(
       { ownership: { kind: 'ownerless' } },
       context,
@@ -133,6 +153,29 @@ it('queues element, text, images and real issue fixes without waking the maker u
       mimeType: 'image/png',
       buffer: pixel,
     })
+    await conversation.getByAltText('general.png', { exact: true }).waitFor()
+    const destination = conversation.getByRole('textbox', { name: 'Feedback destination' })
+    await destination.fill(String(lander))
+    await conversation.getByText('none configured', { exact: true }).waitFor()
+    expect(await conversation.locator(`[data-lander-log="${lander}"]`).count()).toBe(1)
+    expect(
+      await conversation.getByRole('button', { name: 'Send to Agent', exact: true }).count(),
+    ).toBe(0)
+    expect(await destination.isEnabled()).toBe(true)
+    expect(feedbackCalls).toBe(0)
+    expect(directSubmissions).toBe(0)
+    await destination.fill(String(owner.id))
+    await conversation.getByRole('textbox', { name: 'General message' }).waitFor()
+    expect(await conversation.getByRole('textbox', { name: 'General message' }).inputValue()).toBe(
+      'General change',
+    )
+    expect(
+      await queue.getByRole('textbox', { name: 'Queued note 1', exact: true }).inputValue(),
+    ).toBe('Element change')
+    await queue.getByAltText('element.png', { exact: true }).waitFor()
+    await conversation.getByAltText('general.png', { exact: true }).waitFor()
+    expect(await destination.isEnabled()).toBe(true)
+
     // A failed acknowledgement freezes the exact batch, but newer edits/images must remain usable drafts.
     const requests: unknown[] = []
     await page.route('**/api/extensions/native-artifacts/actions/feedback', async (route) => {

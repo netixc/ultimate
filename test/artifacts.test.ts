@@ -17,6 +17,7 @@ import { Subagents, Standing, SubagentsApi } from '../extensions/subagents/api.t
 import { submitInput } from '../server/submit.ts'
 import { send } from '../extensions/messages/send.ts'
 import artifactExtension, { Registry, actions } from '../.ultimate/extensions/artifacts/server.ts'
+import { actions as nativeActions } from '../.ultimate/extensions/native-artifacts/server.ts'
 import { ArtifactsApi, FeedbackTooLargeError } from '../.ultimate/extensions/artifacts/api.ts'
 import {
   ArtifactStorage,
@@ -157,6 +158,46 @@ async function fixture() {
     opened: () => opened,
   }
 }
+
+it('rejects a landing log destination before retaining or admitting a new feedback batch', async () => {
+  const f = await fixture()
+  const artifact = await f.service.publish({ title: 'Review', path: 'page.html' }, f.owner, context)
+  const lander = await f.create()
+  await f.opened().harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).landerConversations[f.workspace] = lander
+  }, context)
+  const input: FeedbackInput = {
+    artifactId: artifact.id,
+    requestId: 'refuse-lander',
+    contentHash: artifact.contentHash,
+    recipientConversation: lander,
+    notes: [{ id: 'note', text: 'Keep this draft' }],
+    images: [],
+  }
+  await expect(f.service.feedback(input, context)).rejects.toThrow(
+    'The landing log cannot receive artifact feedback',
+  )
+  expect(
+    await nativeActions.feedback(JSON.parse(JSON.stringify(input)), {
+      host: f.host,
+      conversationId: f.owner,
+      signal: new AbortController().signal,
+      exec: async () => ({ stdout: '', stderr: '' }),
+    }),
+  ).toMatchObject({ rejected: 'destination' })
+  expect(
+    (await f.opened().harness.snapshot(Registry, ROOT_CONVERSATION_ID, context))?.feedback,
+  ).toEqual({})
+  await expect(
+    lstat(join(f.host.home, 'artifacts', artifact.id, 'feedback')),
+  ).rejects.toMatchObject({ code: 'ENOENT' })
+  const id = digest(JSON.stringify([artifact.id, input.requestId]))
+  expect(
+    await f
+      .opened()
+      .harness.commit((tx) => tx.submissionByRequest(lander, `artifacts:${id}`), context),
+  ).toBeUndefined()
+})
 
 it('publishes from the authenticated owner, refreshes the coherent bundle, and retains it after workspace cleanup', async () => {
   const f = await fixture()

@@ -3,7 +3,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../../server/actions.ts'
 import type { ExtensionHost } from '../../../server/extensions.ts'
-import { ArtifactsApi, FeedbackTooLargeError } from '../artifacts/api.ts'
+import { ArtifactsApi, FeedbackTooLargeError, FeedbackDestinationError } from '../artifacts/api.ts'
 import type { FeedbackInput, LayoutPassInput } from '../artifacts/api.ts'
 import { buildDocument } from './sandbox.ts'
 
@@ -69,6 +69,8 @@ export const actions = {
       // This rejection is proven to precede persistence; every uncertain failure still throws for exact retry.
       if (error instanceof FeedbackTooLargeError)
         return { rejected: 'too-large', message: error.message }
+      if (error instanceof FeedbackDestinationError)
+        return { rejected: 'destination', message: error.message }
       throw error
     }
   },

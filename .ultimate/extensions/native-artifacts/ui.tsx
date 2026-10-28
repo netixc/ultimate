@@ -24,7 +24,7 @@ export const Read = actionRef<
 >('native-artifacts', 'read')
 export const Feedback = actionRef<
   FeedbackInput,
-  FeedbackBundle | { rejected: 'too-large'; message: string }
+  FeedbackBundle | { rejected: 'too-large' | 'destination'; message: string }
 >('native-artifacts', 'feedback')
 export const FeedbackList = actionRef<{ artifactId: string }, FeedbackSummary[]>(
   'native-artifacts',

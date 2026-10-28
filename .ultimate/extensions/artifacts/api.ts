@@ -35,8 +35,8 @@ export type ArtifactsService = {
 }
 /** Shared backend for local HTML artifact reviewers. */
 export const ArtifactsApi = defineApi<ArtifactsService>()('artifacts')
-/** Definitive pre-save size rejection; adapters may safely let the human edit the rejected batch. */
-export { FeedbackTooLargeError } from './types.ts'
+/** Definitive pre-save rejections; adapters may safely let the human edit the rejected batch. */
+export { FeedbackTooLargeError, FeedbackDestinationError } from './types.ts'
 export type {
   Artifact,
   ArtifactSnapshot,

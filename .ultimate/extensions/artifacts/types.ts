@@ -11,6 +11,11 @@ export class FeedbackTooLargeError extends Error {
   readonly code = 'feedback-too-large'
 }
 
+/** A definitive destination rejection before a new feedback batch was saved or admitted. */
+export class FeedbackDestinationError extends Error {
+  readonly code = 'feedback-destination'
+}
+
 export type Artifact = {
   id: string
   title: string

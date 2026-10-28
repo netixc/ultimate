@@ -10,9 +10,12 @@ import {
   formatTime,
   useAction,
   useConversations,
+  useConversation,
+  useDocOf,
   useUltimate,
   useViewport,
 } from '@/sdk'
+import { WorkspacesDoc } from '../../../extensions/workspaces/refs.ts'
 import { FEEDBACK_MAX_JSON_BYTES } from '../artifacts/types.ts'
 import type { Artifact, ArtifactNote, FeedbackInput, FeedbackSummary } from '../artifacts/types.ts'
 import { ReferenceImages } from './attachments.tsx'
@@ -143,10 +146,19 @@ function ReceiptDetails({ bundle }: { bundle: FeedbackSummary }) {
   )
 }
 
-/** Only the real conversation inside our local provider gets this composer; every other conversation is untouched. */
+/** Replace only a loaded input destination in this review scope; keep the landing log's read-only core. */
 export function ArtifactComposer({ core }: { core: ReactNode; dock?: boolean }) {
   const review = useContext(ReviewComposerContext)
-  return review ? <BatchComposer {...review} /> : core
+  const id = useConversation((conversation) => conversation.id)
+  const workspaces = useDocOf(1, WorkspacesDoc)
+  return review &&
+    workspaces &&
+    id !== undefined &&
+    !Object.values(workspaces.landerConversations).includes(id) ? (
+    <BatchComposer {...review} />
+  ) : (
+    core
+  )
 }
 
 function BatchComposer({ artifact, draft, update, statuses, onContinueNote }: ReviewComposerValue) {
@@ -197,7 +209,7 @@ function BatchComposer({ artifact, draft, update, statuses, onContinueNote }: Re
     try {
       const result = await api.action(Feedback, request)
       if ('rejected' in result) {
-        // The native adapter confirms this enriched bundle was rejected before persistence or admission.
+        // The native adapter confirms rejection before persistence or admission.
         update((current) =>
           current.request?.requestId === request.requestId
             ? { ...current, request: undefined, requestGeneral: undefined }
