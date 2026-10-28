@@ -5,12 +5,12 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { browserBinary } from '../../extensions/browser/server.ts'
-import { context } from '../../server/harness.ts'
-import { git } from '../../lib/git.ts'
-import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
-import type { FeedbackBundle } from '../../.ultimate/extensions/artifacts/types.ts'
-import { fauxServer, post, temp, until } from '../helpers.ts'
+import { browserBinary } from '../../../../../extensions/browser/server.ts'
+import { context } from '../../../../../server/harness.ts'
+import { git } from '../../../../../lib/git.ts'
+import { Workspaces } from '../../../../../extensions/workspaces/workspaces.ts'
+import type { FeedbackBundle } from '../../types.ts'
+import { fauxServer, post, temp, until } from '../../../../../test/helpers.ts'
 
 const pixel = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYGD4DwAAAP//cGajQwAAAAZJREFUAwABDgEC81VxbAAAAABJRU5ErkJggg==',

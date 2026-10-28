@@ -2,10 +2,10 @@ import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { browserBinary } from '../../extensions/browser/server.ts'
-import { context } from '../../server/harness.ts'
-import type { LayoutState } from '../../.ultimate/extensions/artifacts/types.ts'
-import { fauxServer, post, temp, until } from '../helpers.ts'
+import { browserBinary } from '../../../../../extensions/browser/server.ts'
+import { context } from '../../../../../server/harness.ts'
+import type { LayoutState } from '../../types.ts'
+import { fauxServer, post, temp, until } from '../../../../../test/helpers.ts'
 
 it('ignores a saved old-frame layout response after a clean live revision has been measured', async () => {
   const home = await temp('ultimate-native-layout-race-')

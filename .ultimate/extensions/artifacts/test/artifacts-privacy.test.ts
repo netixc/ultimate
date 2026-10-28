@@ -3,13 +3,9 @@ import { join, resolve } from 'node:path'
 import { configure } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
-import { context } from '../server/harness.ts'
-import type {
-  Artifact,
-  FeedbackBundle,
-  LayoutState,
-} from '../.ultimate/extensions/artifacts/types.ts'
-import { fauxServer, post, temp } from './helpers.ts'
+import { context } from '../../../../server/harness.ts'
+import type { Artifact, FeedbackBundle, LayoutState } from '../types.ts'
+import { fauxServer, post, temp } from '../../../../test/helpers.ts'
 
 it('keeps human artifact feedback and measurements out of the complete action trace tree', async () => {
   const home = await temp('ultimate-artifacts-privacy-')

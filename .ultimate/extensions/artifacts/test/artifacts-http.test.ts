@@ -3,10 +3,10 @@ import { join, resolve } from 'node:path'
 import { configure } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it } from 'vitest'
-import { context } from '../server/harness.ts'
-import { FEEDBACK_IMAGE_MAX_BYTES } from '../.ultimate/extensions/artifacts/types.ts'
-import type { Artifact, FeedbackBundle } from '../.ultimate/extensions/artifacts/types.ts'
-import { fauxServer, post, temp } from './helpers.ts'
+import { context } from '../../../../server/harness.ts'
+import { FEEDBACK_IMAGE_MAX_BYTES } from '../types.ts'
+import type { Artifact, FeedbackBundle } from '../types.ts'
+import { fauxServer, post, temp } from '../../../../test/helpers.ts'
 
 it('saves the largest accepted reference image through the real action endpoint', async () => {
   const home = await temp('ultimate-artifacts-http-')

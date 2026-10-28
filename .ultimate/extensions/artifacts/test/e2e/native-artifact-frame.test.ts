@@ -4,12 +4,12 @@ import type { AddressInfo } from 'node:net'
 import { chromium } from 'playwright-core'
 import type { Frame, Page } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { browserBinary } from '../../extensions/browser/server.ts'
-import { buildDocument } from '../../.ultimate/extensions/artifacts/sandbox.ts'
-import { decodeFrameMessage } from '../../.ultimate/extensions/artifacts/bridge.ts'
-import type { ArtifactSnapshot } from '../../.ultimate/extensions/artifacts/types.ts'
-import type { FrameMessage } from '../../.ultimate/extensions/artifacts/bridge.ts'
-import { until } from '../helpers.ts'
+import { browserBinary } from '../../../../../extensions/browser/server.ts'
+import { buildDocument } from '../../sandbox.ts'
+import { decodeFrameMessage } from '../../bridge.ts'
+import type { ArtifactSnapshot } from '../../types.ts'
+import type { FrameMessage } from '../../bridge.ts'
+import { until } from '../../../../../test/helpers.ts'
 
 async function inFrame(
   html: string,

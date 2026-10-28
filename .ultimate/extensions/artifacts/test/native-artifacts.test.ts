@@ -2,9 +2,9 @@ import { crc32 } from 'node:zlib'
 import { expect, it } from 'vitest'
 import { parse } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
-import { buildDocument } from '../.ultimate/extensions/artifacts/sandbox.ts'
-import { decodeAnchor, decodeFrameMessage } from '../.ultimate/extensions/artifacts/bridge.ts'
-import type { ArtifactSnapshot } from '../.ultimate/extensions/artifacts/types.ts'
+import { buildDocument } from '../sandbox.ts'
+import { decodeAnchor, decodeFrameMessage } from '../bridge.ts'
+import type { ArtifactSnapshot } from '../types.ts'
 
 function nativeSnapshot(html: string): ArtifactSnapshot {
   return {

@@ -6,14 +6,11 @@ import { createServer } from 'vite-plus'
 import react from '@vitejs/plugin-react'
 import { chromium } from 'playwright-core'
 import { expect, it } from 'vitest'
-import { browserBinary } from '../../extensions/browser/server.ts'
-import { buildDocument } from '../../.ultimate/extensions/artifacts/sandbox.ts'
-import type {
-  ArtifactAnchor,
-  ArtifactSnapshot,
-} from '../../.ultimate/extensions/artifacts/types.ts'
-import type { NativeDocument } from '../../.ultimate/extensions/artifacts/viewer-types.ts'
-import { until } from '../helpers.ts'
+import { browserBinary } from '../../../../../extensions/browser/server.ts'
+import { buildDocument } from '../../sandbox.ts'
+import type { ArtifactAnchor, ArtifactSnapshot } from '../../types.ts'
+import type { NativeDocument } from '../../viewer-types.ts'
+import { until } from '../../../../../test/helpers.ts'
 
 it('captures element and cross-node text targets, validates stale boundaries, and rejects forged messages', async () => {
   const snapshot: ArtifactSnapshot = {

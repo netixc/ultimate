@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { decodeFrameMessage } from '../.ultimate/extensions/artifacts/bridge.ts'
+import { decodeFrameMessage } from '../bridge.ts'
 
 it('decodes bounded target geometry and genuine layout observations without accepting artifact identity', () => {
   const rect = { x: 12, y: -8, width: 200, height: 30 }

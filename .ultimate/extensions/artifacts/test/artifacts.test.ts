@@ -1,33 +1,26 @@
-import { apis, idleNeed, temp } from './helpers.ts'
+import { apis, idleNeed, temp } from '../../../../test/helpers.ts'
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { AgentDoc, configure, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { context, prepareHarness } from '../server/harness.ts'
-import type { OpenHost } from '../server/harness.ts'
-import type { ExtensionHost } from '../server/extensions.ts'
-import { Metadata } from '../server/metadata.ts'
-import { emit } from '../server/events.ts'
-import { ConversationsApi } from '../extensions/conversations/api.ts'
-import { WorkspacesApi } from '../extensions/workspaces/api.ts'
-import { Workspaces } from '../extensions/workspaces/workspaces.ts'
-import { Subagents, Standing, SubagentsApi } from '../extensions/subagents/api.ts'
-import { submitInput } from '../server/submit.ts'
-import { send } from '../extensions/messages/send.ts'
-import artifactExtension, { Registry, actions } from '../.ultimate/extensions/artifacts/server.ts'
-import { ArtifactsApi, FeedbackTooLargeError } from '../.ultimate/extensions/artifacts/api.ts'
-import {
-  ArtifactStorage,
-  digest,
-  feedbackInput,
-} from '../.ultimate/extensions/artifacts/storage.ts'
-import {
-  FEEDBACK_IMAGE_MAX_BYTES,
-  FEEDBACK_MAX_JSON_BYTES,
-} from '../.ultimate/extensions/artifacts/types.ts'
-import type { FeedbackInput, LayoutFinding } from '../.ultimate/extensions/artifacts/types.ts'
+import { context, prepareHarness } from '../../../../server/harness.ts'
+import type { OpenHost } from '../../../../server/harness.ts'
+import type { ExtensionHost } from '../../../../server/extensions.ts'
+import { Metadata } from '../../../../server/metadata.ts'
+import { emit } from '../../../../server/events.ts'
+import { ConversationsApi } from '../../../../extensions/conversations/api.ts'
+import { WorkspacesApi } from '../../../../extensions/workspaces/api.ts'
+import { Workspaces } from '../../../../extensions/workspaces/workspaces.ts'
+import { Subagents, Standing, SubagentsApi } from '../../../../extensions/subagents/api.ts'
+import { submitInput } from '../../../../server/submit.ts'
+import { send } from '../../../../extensions/messages/send.ts'
+import artifactExtension, { Registry, actions } from '../server.ts'
+import { ArtifactsApi, FeedbackTooLargeError } from '../api.ts'
+import { ArtifactStorage, digest, feedbackInput } from '../storage.ts'
+import { FEEDBACK_IMAGE_MAX_BYTES, FEEDBACK_MAX_JSON_BYTES } from '../types.ts'
+import type { FeedbackInput, LayoutFinding } from '../types.ts'
 
 const anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'artifacts-test.owner',
