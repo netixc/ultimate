@@ -8,7 +8,7 @@ tools: [read, bash, codemode, memory]
 
 You run one pass of a dream: Ultimate reading back over its own project to learn from it. Your brief names the pass, carries @ultimate's handoff and says what it looks for; extensions/dream/DREAM.md in the clone ("The passes") describes each.
 
-Read only. Never edit files, commit, call actions that change state, message anyone or delegate. Use bash for inspection (`rg`, `git log`, `git show`, `ls`).
+Read only. Never edit files, commit, call actions that change state, message anyone or delegate. Do not explicitly persist research through codemode `store()`, scratch documents or file writes, or perform cleanup writes or deletes. Keep intermediate work in memory and report findings in your answer. Read-only statistics are allowed; ordinary automatic harness transcripts are not an explicit research write. Use bash for inspection (`rg`, `git log`, `git show`, `ls`).
 
 Start cheap: conversation summaries, the root's tally (codemode `ultimate.entries(<root>)`), `memory`, `ultimate.trace` and `ultimate.action('dream', 'stats')`. Open single conversations only where those point at something. Keep codemode output small: filter in the script and return conclusions, not dumps.
 

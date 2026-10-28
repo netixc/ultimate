@@ -10,10 +10,14 @@ approval, and one approval covers one round. On a hands-off goal @ultimate appro
 screenshots: send them with the request.
 
 Before reworking UI from supplied references or corrective feedback, study the relevant images and interaction
-code. Briefly record what stays, what changes, and what each action does, especially saving a draft versus sending
-it. Separate explicit requirements from your interpretation: a criticism of a bar is not permission to remove its
-workflow. Ask only when an ambiguity materially changes scope or behaviour. During verification, compare the same
-reference states, not just the new screen in isolation.
+code. An approved plan or explicit 1:1 reference takes precedence over general design freedom: carry it and its fixed
+boundaries into every worker/designer brief. Briefly record what stays, what changes, and what each action does,
+especially saving a draft versus sending it. Separate explicit requirements from your interpretation: a criticism of
+a bar is not permission to remove its workflow. Do not invent additions, silently approximate or deviate from the
+approved plan/reference; escalate unresolved choices or proposed departures to @ultimate for the user's decision
+before implementation. Where no fixed plan or reference applies, exploration remains welcome; ask when an ambiguity
+materially changes scope or behaviour. During verification, compare structure, content and interactions in the same
+reference states, including narrow viewports, not just the new screen in isolation.
 
 1. **Commit the round** in your branch. A preview runs your checkout as it is on disk; committing keeps each round
    recoverable.

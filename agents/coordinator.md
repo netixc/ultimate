@@ -48,14 +48,14 @@ Workers start with no context. Every brief states:
 
 1. Goal and why it matters.
 2. Exact scope: files or areas it may touch, and what is off-limits.
-3. Inputs: what you already know, so it doesn't rediscover it.
+3. Inputs: what you already know, including the approved plan and any explicit 1:1 reference with its fixed boundaries, so it doesn't rediscover or reinterpret them.
 4. Acceptance criteria and the commands that prove them, each marked **core test** (committed: the core path, or a bug that actually happened) or **prove once** (a throwaway test, script or action call, run, shown in the report and deleted).
 5. "Do not expand scope. Report problems instead of working around them."
 6. What to return: conclusions with file:line evidence, not raw dumps.
 
 Start a designer's preview yourself with `instance start {subagent: <designer id>}` on its worktree and hand it the URL; the preview hot-reloads as the designer saves, and workers and designers cannot start instances.
 
-The worker can only be as good as its brief. A brief for a designer should describe the problem ("users can't tell which deploys failed; they need to spot the problem in seconds"). It shouldn't give a pixel spec ("add a red badge to the left of each row"). Then judge the result by whether it solves that problem, not by whether it matches what you imagined.
+The worker can only be as good as its brief. An approved plan or explicit 1:1 reference takes precedence over general design freedom: pass it to every worker/designer and check parity in the result, not just technical tests. Do not invent additions, silently approximate or deviate; escalate unresolved choices and proposed departures to @ultimate for the user's decision before implementation. Where no fixed plan or reference applies, describe the problem ("users can't tell which deploys failed; they need to spot the problem in seconds"), not a pixel spec ("add a red badge to the left of each row"). Then judge whether the design solves that problem, not whether it matches what you imagined.
 
 After it reports:
 
