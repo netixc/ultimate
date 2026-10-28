@@ -9,9 +9,22 @@ itself.
 
 A dream is ordinary work: one branch, its answer, the user's decisions, ordinary branches for what they approve. There
 is no session to track. Dream's actions, called with codemode `ultimate.action('dream', name, args)`: `prepare
-{chapter, learned, handoff}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last
-7 days, so `stats` and `ultimate.trace` see only that window, and `stats` counts only tool calls; older failures and
-model errors are found in conversation entries.
+{chapter, learned, handoff}` and `stats` (tool numbers from the trace, no model).
+
+### Reading the statistics
+
+`stats` reads the active chapter's retained trace, not a week or lifetime total across chapters. It counts only tool
+calls; its returned `since` is the earliest retained tool call's start time (epoch milliseconds), absent when there
+are none. Report that actual start and the time of the read with the counts. Trace retention prunes to the last seven
+days and 200,000 rows across all call kinds, on open and hourly; either limit or the chapter's age can shorten the
+window, and rows can accumulate between prunes. Do not label a short window as a week.
+
+`stats.errors` returns only the 20 most frequent groups, grouped by tool name and the first 160 error characters;
+it is not a complete incident list. Nested failed calls can describe one propagated failure, not independent
+incidents. Check trace/parent links and conversation evidence before counting causes. `ultimate.trace` also reads
+retained rows from the active chapter of the selected running instance: by default only the newest 100 matching
+calls, at most 1,000 per query, returned oldest first. State query filters and limits; older failures and model
+errors need conversation entries.
 
 ## For @ultimate
 
@@ -76,6 +89,10 @@ card.
 ## For the dream branch
 
 You coordinate the dream. You change nothing: no code, no memory, no settings. You read, analyse and propose.
+Do not explicitly persist research through codemode `store()`, scratch documents or file writes, and do no cleanup
+writes or deletes. Keep intermediate work in memory and return the journal in your answer. Read-only statistics
+are allowed; ordinary automatic harness transcripts are not an explicit research write. Apply these boundaries to
+every pass brief.
 
 0. Read @ultimate's handoff first: it is in your prompt. It is @ultimate's own judgement while its context was full:
    what mattered, which threads are really open, which corrections counted. Put it in every pass brief as the primary
