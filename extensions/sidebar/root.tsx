@@ -14,35 +14,13 @@ import {
   useConcludedSince,
   useOverview,
 } from '../conversations/ui.tsx'
-import type { Landing } from './landings.ts'
 import { RowMenu, saveTitle } from './rows.tsx'
 import { Section } from './section.tsx'
 import { useShell } from './state.tsx'
 import { workOf } from './work.ts'
 import type { Work } from './work.ts'
 
-/** When a branch last landed: its latest landed submission's last step. */
-export function landedAt(index: ReturnType<typeof useWorkspaceIndex>, id: number) {
-  let at: number | undefined
-  for (const result of Object.values(index.results))
-    if (result.conversationId === id && result.outcome === 'landed')
-      at = Math.max(at ?? 0, result.steps.at(-1)?.at ?? result.at)
-  return at
-}
-
-/**
- * Whether a branch is still in flight: started and neither concluded (the caller leaves those out) nor landed since
- * its latest input. A branch that lands and then gets new work is in flight again.
- */
-export function inFlight(
-  conversation: ConversationSummary,
-  index: ReturnType<typeof useWorkspaceIndex>,
-) {
-  if (conversation.busy) return true
-  if (index.queue.some((item) => item.conversationId === conversation.id)) return true
-  const landed = landedAt(index, conversation.id)
-  return landed === undefined || (conversation.inputAt ?? 0) > landed
-}
+export { landedAt, inFlight, stillOpen } from '../../lib/in-flight.ts'
 
 /** Where an open branch stands, in a word or two, and how loud to say it. */
 function useBranchState(
@@ -292,18 +270,6 @@ export type Flight = {
   parked?: boolean
   subagents?: ReactNode
 }
-
-/**
- * Whether a flight still counts as open once the roots' own landing notes are known too: the lander keeps only recent
- * results, so a branch whose landing note is newer than its latest input landed, unless it works again.
- */
-export const stillOpen = (flight: Flight, landings: readonly Landing[]) =>
-  flight.working ||
-  !landings.some(
-    (event) =>
-      event.from === flight.conversation.id &&
-      (event.at ?? 0) >= (flight.conversation.inputAt ?? 0),
-  )
 
 /**
  * In flight · N: every open branch across the project's trees, newest input first, each with its feature, state, age,

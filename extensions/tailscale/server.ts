@@ -9,13 +9,14 @@ import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
-import { userSettingsPath } from '../../lib/settings.ts'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { TailscaleApi } from './api.ts'
 import type { Status } from './api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { RetryAction, StatusAction } from './refs.ts'
+import { configuredPeerHosts, readPeerOnline } from './peers.ts'
 interface Serve {
   TCP?: Record<string, unknown>
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
@@ -306,7 +307,20 @@ export default function tailscale(host: ExtensionHost) {
   }
   host.onOpen(begin)
   retries.set(host, begin)
-  host.implement(TailscaleApi, { status: () => status })
+  host.implement(TailscaleApi, {
+    status: () => status,
+    async peerOnline(hostnames) {
+      const settings = await readSettings(userSettingsPath(host.userHome)).catch(
+        // Invalid user settings are reported by the loader; they authorize no remote hosts here.
+        () => ({}),
+      )
+      const hosts = configuredPeerHosts('remotes' in settings ? settings.remotes : undefined)
+      return readPeerOnline(hostnames, hosts, async () => {
+        if (closed || status.state !== 'ready') throw new Error('Tailscale is not ready')
+        return (await command(['status', '--json'])).stdout
+      })
+    },
+  })
   host.onClose(async () => {
     closed = true
     await opening

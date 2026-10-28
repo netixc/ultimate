@@ -31,6 +31,12 @@ import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
 import { storeImages, storedImages } from './draft-images.ts'
+import {
+  hasNavigationDrafts,
+  restoreNavigationDrafts,
+  saveNavigationDrafts,
+} from './navigation-drafts.ts'
+import type { NavigationDraft } from './navigation-drafts.ts'
 import { storeAttachments, storedAttachments, validateAttachments } from './draft-attachments.ts'
 import {
   ComposerAttachmentContext,
@@ -188,13 +194,21 @@ type Draft = ComposerAttachmentState & {
   requestId: string
   error?: string
   sending: boolean
+  hydrating: boolean
   revision: number
   retry?: ComposerSubmission
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
 const drafts = new Map<number | string | undefined, ReturnType<typeof createDraft>>()
+let restoration: Promise<void> | undefined
+let restorationState: 'new' | 'loading' | 'ready' | 'failed' = 'new'
+let restorationError: Error | undefined
+let draftVersion = 0
+let preparing = false
+
 function createDraft(id: number | string | undefined) {
+  draftVersion++
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -202,11 +216,16 @@ function createDraft(id: number | string | undefined) {
     attachments: key ? storedAttachments(key) : [],
     requestId: crypto.randomUUID(),
     sending: false,
+    hydrating: restorationState !== 'ready',
+    error: restorationError?.message,
     revision: 0,
   }
   const listeners = new Set<() => void>()
+  const edited = new Set<'text' | 'images' | 'attachments'>()
   return {
     key,
+    edited,
+    imageReads: new Set<{ current: boolean }>(),
     get: () => value,
     subscribe: (listener: () => void) => {
       listeners.add(listener)
@@ -215,12 +234,26 @@ function createDraft(id: number | string | undefined) {
       }
     },
     set: (change: Partial<Draft>) => {
+      draftVersion++
       const previous = value
+      if (change.revision !== undefined) {
+        if (change.text !== undefined) edited.add('text')
+        if (change.images !== undefined && change.images !== previous.images) edited.add('images')
+        if (change.attachments !== undefined && change.attachments !== previous.attachments)
+          edited.add('attachments')
+      }
       value = { ...value, ...change }
       if (change.revision !== undefined && change.revision !== previous.revision) {
         value.requestId = change.requestId ?? crypto.randomUUID()
         value.retry = change.retry
       }
+      if (
+        value.text !== previous.text ||
+        value.images !== previous.images ||
+        value.attachments !== previous.attachments ||
+        value.requestId !== previous.requestId
+      )
+        autosaveDrafts()
       if (key && value.images !== previous.images) storeImages(key, value.images)
       if (key && value.attachments !== previous.attachments)
         storeAttachments(key, value.attachments)
@@ -229,9 +262,127 @@ function createDraft(id: number | string | undefined) {
   }
 }
 
+function navigationSnapshot(): NavigationDraft[] {
+  const saved: NavigationDraft[] = []
+  for (const [id, draft] of drafts) {
+    const current = draft.get()
+    if (!current.text && !current.images.length && !current.attachments.length) continue
+    if (id === undefined)
+      throw new Error('Wait for the draft conversation to load before switching instances.')
+    saved.push({
+      id,
+      text: current.text,
+      images: current.images,
+      attachments: current.attachments,
+      requestId: current.requestId,
+    })
+  }
+  return saved
+}
+
+function autosaveDrafts() {
+  if (restorationState !== 'ready') return
+  const version = draftVersion
+  const failed = (failure: unknown) => {
+    if (version !== draftVersion) return
+    for (const draft of drafts.values()) draft.set({ error: errorMessage(failure) })
+  }
+  try {
+    // Install the new revision (or clear its pointer) in this turn, before any unload can restore old content.
+    void saveNavigationDrafts(navigationSnapshot()).catch(failed)
+  } catch (failure) {
+    failed(failure)
+  }
+}
+
 function getDraft(id: number | string | undefined) {
+  if (restorationState === 'new') restorationState = hasNavigationDrafts() ? 'loading' : 'ready'
   if (!drafts.has(id)) drafts.set(id, createDraft(id))
+  if (restorationState === 'loading' && !restoration) {
+    restoration = restoreNavigationDrafts((saved) => {
+      for (const { id: savedId, ...snapshot } of saved) {
+        if (!drafts.has(savedId)) drafts.set(savedId, createDraft(savedId))
+        const draft = drafts.get(savedId)!
+        // SDK setters are synchronous: keep their newer fields without dropping untouched backup images.
+        const current = draft.get()
+        draft.set({
+          text: draft.edited.has('text') ? current.text : snapshot.text,
+          images: draft.edited.has('images') ? current.images : snapshot.images,
+          attachments: draft.edited.has('attachments')
+            ? current.attachments
+            : snapshot.attachments.map((file) =>
+                file.status === 'ready'
+                  ? file
+                  : {
+                      ...file,
+                      status: 'error',
+                      error: 'Choose this file again to upload it.',
+                    },
+              ),
+          requestId: draft.edited.size ? current.requestId : snapshot.requestId,
+        })
+        if (draft.key) {
+          if (draft.get().text) localStorage.setItem(draft.key, draft.get().text)
+          else localStorage.removeItem(draft.key)
+        }
+      }
+    })
+      .then(async () => {
+        // SDK setters can also run while the merged snapshot is being written. Finish its latest revision.
+        let version: number
+        do {
+          version = draftVersion
+          await saveNavigationDrafts(navigationSnapshot())
+        } while (version !== draftVersion)
+        restorationState = 'ready'
+        for (const draft of drafts.values()) draft.set({ hydrating: false })
+      })
+      .catch((failure: unknown) => {
+        restorationState = 'failed'
+        restorationError = new Error(`${errorMessage(failure)} Stay on this page.`, {
+          cause: failure,
+        })
+        for (const draft of drafts.values()) draft.set({ error: restorationError.message })
+      })
+  }
   return drafts.get(id)!
+}
+
+/**
+ * Await immediately before same-tab instance navigation. Full drafts stay on this origin, including images too
+ * large for localStorage. Rejects instead of leaving with an upload, submission or storage operation unfinished.
+ */
+export async function prepareInstanceNavigation(): Promise<void> {
+  if (preparing) throw new Error('Draft preservation is already in progress. Stay on this page.')
+  preparing = true
+  try {
+    // Even a page with no mounted composer may be returning with an unconsumed backup.
+    if (restorationState === 'new') getDraft(undefined)
+    await restoration
+    if (restorationError) throw restorationError
+    const check = () => {
+      for (const draft of drafts.values()) {
+        const current = draft.get()
+        if (current.sending || current.retry)
+          throw new Error(
+            'Wait for the draft submission to finish or resolve its retry before switching instances.',
+          )
+        if (
+          [...draft.imageReads].some((read) => read.current) ||
+          current.attachments.some((file) => file.status !== 'ready')
+        )
+          throw new Error('Finish reading or uploading attachments before switching instances.')
+      }
+    }
+    check()
+    const version = draftVersion
+    await saveNavigationDrafts(navigationSnapshot())
+    check()
+    if (version !== draftVersion)
+      throw new Error('The draft changed while saving. Try switching instances again.')
+  } finally {
+    preparing = false
+  }
 }
 
 /** Replace conversation `id`'s draft with `text`, as typing it would; the caller focuses the composer. */
@@ -265,7 +416,7 @@ function clearDraft(
   const stored = draft.key ? (localStorage.getItem(draft.key) ?? '') : ''
   if (draft.get().revision !== snapshot.revision) return
   if (draft.key && stored === snapshot.text) localStorage.removeItem(draft.key)
-  draft.set({ text: stored === snapshot.text ? '' : stored })
+  draft.set({ text: '' })
 }
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
@@ -276,7 +427,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const attachmentSubmit = useContext(ComposerAttachmentSubmitContext)
   const intro = useIntro()
   const draft = getDraft(id)
-  const { text, images, attachments, error, sending } = useSyncExternalStore(
+  const { text, images, attachments, error, sending, hydrating } = useSyncExternalStore(
     draft.subscribe,
     draft.get,
   )
@@ -305,14 +456,16 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     images,
     setImages,
     setError,
-    disabled: () => loading || draft.get().sending,
+    disabled: () => loading || draft.get().hydrating || draft.get().sending,
   })
+  useEffect(() => {
+    draft.imageReads.add(pending)
+    return () => {
+      draft.imageReads.delete(pending)
+    }
+  }, [draft, pending])
   const models = useModels()
   const key = draft.key
-  useEffect(() => {
-    const stored = (key ? localStorage.getItem(key) : null) ?? ''
-    if (stored !== draft.get().text) draft.set({ text: stored, revision: draft.get().revision + 1 })
-  }, [draft, key])
   const update = (value: string) => {
     draft.set({ text: value, revision: draft.get().revision + 1 })
     if (!key) return
@@ -324,15 +477,23 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const attachmentsPending = attachments.some((file) => file.status !== 'ready')
 
   async function send(whenBusy?: 'steer' | 'followUp') {
-    if (loading || empty || blocked || draft.get().sending || pending.current || id === undefined)
-      return
     const submitted = draft.get()
+    if (
+      loading ||
+      (!submitted.text.trim() && !submitted.images.length && !submitted.attachments.length) ||
+      blocked ||
+      submitted.hydrating ||
+      submitted.sending ||
+      pending.current ||
+      id === undefined
+    )
+      return
     if (submitted.attachments.some((file) => file.status !== 'ready')) return
     if (submitted.attachments.length && !attachmentSubmit) {
       setError('The attachment extension is unavailable. Remove the files or enable it to send.')
       return
     }
-    if (target && (images.length || attachments.length)) {
+    if (target && (submitted.images.length || submitted.attachments.length)) {
       setError('Attachments stay here: remove them to send elsewhere')
       return
     }
@@ -342,7 +503,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       : busy
         ? (whenBusy ?? 'steer')
         : undefined
-    let input = submitted.retry ?? { text: text.trim(), images }
+    let input = submitted.retry ?? { text: submitted.text.trim(), images: submitted.images }
     let previous: { text: string; images: Draft['images'] } | undefined
     let attempt: ComposerSubmission | undefined
     try {
@@ -375,7 +536,6 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       draft.set({ requestId: crypto.randomUUID(), retry: undefined })
     } catch (failure) {
       const unchanged = draft.get().revision === submitted.revision
-      if (key && unchanged) draft.set({ text: localStorage.getItem(key) ?? '' })
       // A steer withdrawn for a merge that then failed to send would be lost: it comes back into the draft.
       if (previous) {
         update(mergedSteer(previous, { text: draft.get().text, images: [] }).text)
@@ -390,7 +550,14 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   }
   /** ↑ on the first line brings every queued input back into the editor to edit and send again. */
   async function recall() {
-    if (loading || draft.get().sending || id === undefined || queued.length === 0) return
+    if (
+      loading ||
+      draft.get().hydrating ||
+      draft.get().sending ||
+      id === undefined ||
+      queued.length === 0
+    )
+      return
     draft.set({ sending: true, error: undefined })
     try {
       const recalled = await recallQueued(api, id, queued)
@@ -428,7 +595,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         conversationId: id,
         images,
         attachments,
-        disabled: loading || sending || reading,
+        disabled: loading || hydrating || sending || reading,
         update: updateAttachments,
         setImages,
         setAttachments: (change) =>
@@ -453,13 +620,13 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
         >
           <ImagePreviews
             images={images}
-            disabled={loading || sending || reading}
+            disabled={loading || hydrating || sending || reading}
             remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
           />
           <Slot name="composer.attachments" />
           <PromptInputTextarea
             autoFocus={!touchKeyboard()}
-            readOnly={loading || sending}
+            readOnly={loading || hydrating || sending}
             onPaste={(event) => void paste(event)}
             id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
             data-conversation={id}
@@ -506,7 +673,13 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
               {(!busy || !empty) && (
                 <PromptInputSubmit
                   disabled={
-                    loading || empty || !!blocked || sending || reading || attachmentsPending
+                    loading ||
+                    hydrating ||
+                    empty ||
+                    !!blocked ||
+                    sending ||
+                    reading ||
+                    attachmentsPending
                   }
                   aria-label={loading ? 'Loading conversation' : 'Send'}
                   title={

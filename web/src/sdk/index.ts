@@ -2,6 +2,12 @@
  * The extension SDK: everything a `web.tsx` needs besides components (`@/components/ui/*`, `@/components/ai/*`).
  * The guide is extensions/README.md.
  */
+import type { Notice } from '../../../shared/protocol.ts'
+import { store } from './client.ts'
+
+/** Show an existing application notice, for example when a guarded navigation fails. */
+export const notify = (notice: Notice) => store.notify(notice)
+
 export {
   ConversationKind,
   defineWebExtension,
@@ -70,7 +76,12 @@ export { UserText, UserView } from '../app/user-turn.tsx'
 export { AllProvided, Provided } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
 /** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
-export { ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'
+export {
+  ComposerRedirect,
+  fillComposer,
+  insertIntoComposer,
+  prepareInstanceNavigation,
+} from '../app/composer.tsx'
 export type { ComposerTarget } from '../app/composer.tsx'
 export { ComposerAttachmentAdapter, useComposerAttachments } from './composer-attachments.tsx'
 export type {

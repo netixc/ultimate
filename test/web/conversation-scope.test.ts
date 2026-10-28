@@ -5,6 +5,21 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { StreamedView } from '../../shared/protocol.ts'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 import { FakeSource } from './fake-source.ts'
+import { fillComposer, prepareInstanceNavigation } from '../../web/src/app/composer.tsx'
+import type { NavigationDraft } from '../../web/src/app/navigation-drafts.ts'
+
+const preservation = vi.hoisted(() =>
+  vi.fn<(drafts: NavigationDraft[]) => Promise<void>>(async () => {}),
+)
+const recovery = vi.hoisted(() => ({
+  has: vi.fn<() => boolean>(() => false),
+  restore: vi.fn<(restore: (drafts: NavigationDraft[]) => void) => Promise<void>>(async () => {}),
+}))
+vi.mock('../../web/src/app/navigation-drafts.ts', () => ({
+  hasNavigationDrafts: recovery.has,
+  restoreNavigationDrafts: recovery.restore,
+  saveNavigationDrafts: preservation,
+}))
 
 const harness = vi.hoisted(() => ({
   sources: [] as FakeSource[],
@@ -167,6 +182,97 @@ const scoped = (id: number, children: ReactNode) => h(ConversationScope, { id, c
 function renderScopes() {
   return renderToStaticMarkup(h(Fragment, null, scoped(7, h(Probe)), scoped(9, h(Probe)), h(Probe)))
 }
+
+it('prepares full scoped drafts before navigation and stays when preservation fails', async () => {
+  let controller: ComposerAttachmentController
+  await registry.setLoaders({
+    '/extensions/navigation/web.tsx': async () => ({
+      default: {
+        slots: {
+          'composer.attachments': () => {
+            controller = useComposerAttachments()
+            return null
+          },
+        },
+      },
+    }),
+  })
+  effects.push(store.watchConversation(71))
+  await tick()
+  source(71).send('view', view(71, 'synthetic'))
+  renderToStaticMarkup(scoped(71, h(Conversation)))
+  const images = [{ data: 'AAAA'.repeat(500_001), mimeType: 'image/png' }]
+  const attachments = [
+    { id: 'synthetic-file', name: 'notes.txt', size: 12, status: 'ready' as const },
+  ]
+  controller!.update(() => ({ images, attachments }))
+  harness.change!({ target: { value: 'Synthetic draft stays on its origin' } })
+  // Ordinary edits autosave too, without calling the Fleet navigation hook.
+  expect(preservation).toHaveBeenLastCalledWith([
+    expect.objectContaining({
+      id: 71,
+      text: 'Synthetic draft stays on its origin',
+      images,
+      attachments,
+    }),
+  ])
+  preservation.mockResolvedValueOnce()
+  const navigate = vi.fn<() => void>()
+  await prepareInstanceNavigation().then(navigate)
+  expect(navigate).toHaveBeenCalledOnce()
+  expect(preservation).toHaveBeenLastCalledWith([
+    expect.objectContaining({
+      id: 71,
+      text: 'Synthetic draft stays on its origin',
+      images,
+      attachments,
+    }),
+  ])
+  navigate.mockClear()
+  preservation.mockRejectedValueOnce(new Error('Could not preserve drafts. Stay on this page.'))
+  await expect(prepareInstanceNavigation().then(navigate)).rejects.toThrow(
+    'Could not preserve drafts',
+  )
+  expect(navigate).not.toHaveBeenCalled()
+  renderToStaticMarkup(scoped(71, h(Conversation)))
+  expect(controller!.images).toEqual(images)
+  expect(controller!.attachments).toEqual(attachments)
+  controller!.update(() => ({ images: [], attachments: [] }))
+  harness.change!({ target: { value: '' } })
+})
+
+it('keeps this tab’s text through remount, failed send and accepted send despite another tab’s localStorage', async () => {
+  effects.push(store.watchConversation(73))
+  await tick()
+  source(73).send('view', view(73, 'synthetic'))
+  renderToStaticMarkup(scoped(73, h(Conversation)))
+  commitEffects()
+  fillComposer(73, 'A private draft text')
+  storage.set('ultimate.draft.73', 'B shared ordinary storage text')
+  renderToStaticMarkup(scoped(73, h(Conversation)))
+  commitEffects()
+  expect(renderToStaticMarkup(scoped(73, h(Conversation)))).toContain('A private draft text')
+  fillComposer(73, 'A text before failed send')
+  renderToStaticMarkup(scoped(73, h(Conversation)))
+  storage.set('ultimate.draft.73', 'B shared ordinary storage text')
+  harness.fetch.mockRejectedValueOnce(new Error('Synthetic admission failure'))
+  harness.submit!()
+  await tick()
+  expect(renderToStaticMarkup(scoped(73, h(Conversation)))).toContain('A text before failed send')
+  expect(preservation.mock.lastCall![0].find((draft) => draft.id === 73)?.text).toBe(
+    'A text before failed send',
+  )
+  fillComposer(73, 'A text before accepted send')
+  renderToStaticMarkup(scoped(73, h(Conversation)))
+  storage.set('ultimate.draft.73', 'B shared ordinary storage text')
+  harness.submit!()
+  await tick()
+  const cleared = renderToStaticMarkup(scoped(73, h(Conversation)))
+  expect(cleared).not.toContain('A text before accepted send')
+  expect(cleared).not.toContain('B shared ordinary storage text')
+  expect(storage.get('ultimate.draft.73')).toBe('B shared ordinary storage text')
+  expect(preservation.mock.lastCall![0].some((draft) => draft.id === 73)).toBe(false)
+})
 
 it('keeps two scoped snapshots, ops, transcripts and documents independent of the shown conversation', async () => {
   harness.sources[0].send('view', view(1, 'shown'))
@@ -397,6 +503,9 @@ it('keeps uploading and failed attachments in their draft, blocks send, and clea
   expect(submit.mock.calls[1][0].requestId).toBe(failedId)
   render(31)
   expect(controllers.get(31)!.attachments).toEqual([])
+  // An admitted send removes its unsent storage work, while the other draft remains available.
+  expect(preservation.mock.lastCall![0].some((draft) => draft.id === 31)).toBe(false)
+  expect(preservation.mock.lastCall![0].some((draft) => draft.id === 33)).toBe(true)
   render(33)
   expect(controllers.get(33)!.attachments[0].id).toBe('other')
 })
@@ -592,4 +701,22 @@ it('runs useAction on the scope even before its snapshot arrives', async () => {
     '/api/extensions/test/actions/scoped',
     expect.objectContaining({ body: JSON.stringify({ args: null, conversationId: 21 }) }),
   )
+})
+
+it('shows the restore failure reason and blocks preparation without resaving an incomplete draft', async () => {
+  await registry.setLoaders({})
+  vi.resetModules()
+  const reason = 'Draft images unavailable. Restoration stopped.'
+  recovery.has.mockReturnValueOnce(true)
+  recovery.restore.mockRejectedValueOnce(new Error(reason))
+  preservation.mockClear()
+  const isolated = await import('../../web/src/app/composer.tsx')
+  renderToStaticMarkup(h(isolated.Composer))
+  await tick()
+  const markup = renderToStaticMarkup(h(isolated.Composer))
+  expect(markup).toContain(reason)
+  expect(markup).not.toContain('reload to retry')
+  await expect(isolated.prepareInstanceNavigation()).rejects.toThrow(reason)
+  expect(preservation).not.toHaveBeenCalled()
+  expect(harness.fetch).not.toHaveBeenCalled()
 })

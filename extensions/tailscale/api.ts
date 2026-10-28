@@ -3,6 +3,9 @@
  */
 import { defineApi } from '../../shared/extension-api.ts'
 import type { Status } from './refs.ts'
+import type { PeerStatuses } from './peers.ts'
+
+export type { PeerOnline, PeerStatuses } from './peers.ts'
 
 export type { Status }
 
@@ -10,6 +13,8 @@ export type { Status }
 export interface TailscaleService {
   /** This server's current publication status; read `url` for its tailnet address. */
   status(): Status
+  /** Read Tailscale's online flag only for requested hosts already named in user remotes. Unknown is null. */
+  peerOnline(hostnames: string[]): Promise<PeerStatuses>
 }
 /** Tailnet publication; `want` it, since tailscale is optional. */
 export const TailscaleApi = defineApi<TailscaleService>()('tailscale')

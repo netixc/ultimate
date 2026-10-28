@@ -24,6 +24,13 @@ The status line's `tailnet` indicator opens a popover with the `status` action, 
 
 Other extensions read the status through `TailscaleApi` (`api.ts`), `host.want(TailscaleApi)?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
 
+`peerOnline(hostnames)` reads the existing CLI status without changing configuration. It returns only exact DNS-name
+or hostname matches for hosts already present in user `remotes`, as `{ [requestedHost]: { id, online } | null }`.
+The opaque device ID allows several project ports on one device to count once. `online: false` is Tailscale's
+reported offline state, not proof that the hardware is powered off. Missing, ambiguous or inaccessible status is
+unknown (`null`); the service never returns other peers, addresses or raw CLI output. This does not discover projects
+or expose additional machines.
+
 ## On your phone's home screen
 
 The web UI installs as a standalone app (`web/public/manifest.webmanifest`, the meta tags in `web/index.html`; no
