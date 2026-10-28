@@ -1,0 +1,410 @@
+/* Geometry and palette from the approved Fleet reference; scoped independently of the app theme. */
+.fleet-rail {
+  --line: #27252c;
+  --muted: #85808e;
+  --purple: #b99ae9;
+  --green: #72c9a0;
+  position: relative;
+  width: 56px;
+  flex: 0 0 56px;
+  min-height: 0;
+  align-self: stretch;
+  color-scheme: dark;
+  color: #c4c1cb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: normal;
+  letter-spacing: normal;
+  text-align: left;
+}
+
+.fleet-rail,
+.fleet-rail *,
+.fleet-rail *::before,
+.fleet-rail *::after {
+  box-sizing: border-box;
+}
+
+.fleet-rail[data-pinned='true'] {
+  width: 250px;
+  flex-basis: 250px;
+}
+
+.fleet-rail button {
+  appearance: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+}
+
+.fleet-rail button,
+.fleet-rail summary {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fleet-rail button:hover,
+.fleet-rail summary:hover {
+  color: #e4d9f5;
+}
+
+.fleet-rail summary {
+  list-style: none;
+}
+
+.fleet-rail summary::-webkit-details-marker {
+  display: none;
+}
+
+.fleet-rail :focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 3px;
+}
+
+.fleet-rail .fleet {
+  position: absolute;
+  z-index: 3;
+  inset: 0 auto 0 0;
+  width: 56px;
+  background: #0c0d0f;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+
+.fleet-rail .expanded {
+  display: none;
+}
+
+.fleet-rail[data-expanded='true'] .fleet {
+  width: 250px;
+  box-shadow: 8px 0 20px #0003;
+}
+
+.fleet-rail[data-expanded='true'] .expanded {
+  display: inline;
+}
+
+.fleet-rail[data-expanded='true'] .compact {
+  display: none;
+}
+
+.fleet-rail .fleet-head {
+  height: 36px;
+  min-height: 36px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  display: flex;
+  align-items: center;
+}
+
+.fleet-rail .fleet-toggle {
+  height: 33px;
+  width: 55px;
+  flex: 0 0 55px;
+  display: grid;
+  place-items: center;
+  color: var(--purple);
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+.fleet-rail .fleet-toggle:hover {
+  background: #201a29;
+}
+
+.fleet-rail .fleet-toggle:focus-visible {
+  outline-offset: -4px;
+}
+
+.fleet-rail .wordmark {
+  color: var(--purple);
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 3px;
+}
+
+.fleet-rail .pin {
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: #8c8790;
+  padding: 9px 13px;
+  margin-left: auto;
+}
+
+.fleet-rail[data-pinned='true'] .pin {
+  color: var(--purple);
+}
+
+.fleet-rail .pin:focus-visible {
+  outline-offset: -3px;
+}
+
+.fleet-rail .tile {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  background: #1c1d20;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #a8a3ae;
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  position: relative;
+}
+
+.fleet-rail .home-row {
+  height: 40px;
+  min-height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 5px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  color: #b8b4be;
+  position: relative;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.fleet-rail .home-icon {
+  font-size: 19px;
+}
+
+.fleet-rail .home-copy {
+  min-width: 0;
+}
+
+.fleet-rail .count {
+  position: absolute;
+  right: 5px;
+  top: 1px;
+  display: grid;
+  place-items: center;
+  background: #edc36f;
+  color: #382b13;
+  border-radius: 50%;
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  width: 17px;
+  height: 17px;
+}
+
+.fleet-rail[data-expanded='true'] .count {
+  position: static;
+  margin-left: auto;
+  flex: 0 0 17px;
+}
+
+.fleet-rail .fleet-groups {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.fleet-rail .fleet-footer {
+  height: 28px;
+  min-height: 28px;
+  flex-shrink: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.fleet-rail .machine summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  color: #716d76;
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fleet-rail .machine:first-child summary {
+  height: 31px;
+}
+
+.fleet-rail[data-expanded='true'] .machine summary {
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 14px 0 56px;
+}
+
+.fleet-rail .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+  flex: 0 0 6px;
+}
+
+.fleet-rail .dot.off {
+  background: #5a565f;
+}
+
+.fleet-rail .machine-name {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fleet-rail[data-expanded='true'] .machine-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-rail .eye {
+  width: 11px;
+  height: 7px;
+  flex: 0 0 11px;
+  border: 1px solid #5c5862;
+  border-radius: 60%;
+  position: relative;
+  margin-left: 2px;
+}
+
+.fleet-rail .eye::after {
+  content: '';
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #5c5862;
+  top: 1px;
+  left: 3px;
+}
+
+.fleet-rail .machine-status {
+  color: #706978;
+  text-transform: none;
+  margin-left: auto;
+}
+
+.fleet-rail .project-row {
+  width: 100%;
+  height: 39px;
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  padding: 3px 12px;
+  position: relative;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.fleet-rail .project-copy {
+  display: none;
+}
+
+.fleet-rail[data-expanded='true'] .project-copy {
+  display: inline;
+}
+
+.fleet-rail .port {
+  color: #68626e;
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  margin-left: 4px;
+}
+
+.fleet-rail .project-row.current .tile {
+  background: #3b304c;
+  border-color: #695180;
+  color: #d3b7fa;
+  box-shadow: inset 0 0 8px #b99ae914;
+}
+
+.fleet-rail .project-row.current::before {
+  position: absolute;
+  content: '';
+  width: 3px;
+  height: 26px;
+  left: 0;
+  border-radius: 0 3px 3px 0;
+  background: var(--purple);
+}
+
+.fleet-rail[data-expanded='true'] .project-row.current {
+  background: #292332;
+  color: #bda0e1;
+}
+
+.fleet-rail .in-flight {
+  height: 7px;
+  width: 7px;
+  position: absolute;
+  left: 39px;
+  bottom: 4px;
+  border-radius: 50%;
+  background: var(--purple);
+  border: 1px solid #17131d;
+}
+
+.fleet-rail[data-expanded='true'] .in-flight {
+  left: auto;
+  right: 12px;
+  top: 16px;
+  bottom: auto;
+}
+
+.fleet-rail .project-row:not(.current):not(.offline):hover {
+  background: #1a181f;
+}
+
+.fleet-rail .offline {
+  opacity: 0.43;
+}
+
+.fleet-rail .offline .tile {
+  border: 1px dashed #625b6b;
+  background: transparent;
+}
+
+@media (max-width: 620px) {
+  .fleet-rail[data-pinned='true'] {
+    width: 56px;
+    flex-basis: 56px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fleet-rail button,
+  .fleet-rail summary {
+    transition:
+      background-color 0.14s,
+      color 0.14s;
+  }
+}

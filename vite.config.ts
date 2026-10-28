@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite-plus'
 import { artifactUnitTests } from './.ultimate/extensions/artifacts/test/config.ts'
+import { fleetUnitTests } from './.ultimate/extensions/fleet/test/config.ts'
 export default defineConfig({
   root: 'web',
   plugins: [react(), tailwindcss()],
@@ -24,15 +25,27 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ['test/**', '.ultimate/extensions/artifacts/test/**'],
-        excludeFiles: ['test/e2e/**', '.ultimate/extensions/artifacts/test/e2e/**'],
+        files: [
+          'test/**',
+          '.ultimate/extensions/artifacts/test/**',
+          '.ultimate/extensions/fleet/test/**',
+        ],
+        excludeFiles: [
+          'test/e2e/**',
+          '.ultimate/extensions/artifacts/test/e2e/**',
+          '.ultimate/extensions/fleet/test/e2e/**',
+        ],
         rules: {
           'ultimate/no-test-timeout': 'error',
           'ultimate/no-real-wait-in-fast-tests': 'error',
         },
       },
       {
-        files: ['test/**', '.ultimate/extensions/artifacts/test/**'],
+        files: [
+          'test/**',
+          '.ultimate/extensions/artifacts/test/**',
+          '.ultimate/extensions/fleet/test/**',
+        ],
         excludeFiles: ['test/helpers.ts'],
         rules: { 'ultimate/no-local-test-polling': 'error' },
       },
@@ -42,7 +55,11 @@ export default defineConfig({
       },
       {
         files: ['**/*'],
-        excludeFiles: ['test/**', '.ultimate/extensions/artifacts/test/**'],
+        excludeFiles: [
+          'test/**',
+          '.ultimate/extensions/artifacts/test/**',
+          '.ultimate/extensions/fleet/test/**',
+        ],
         rules: {
           'ultimate/replay-safe-reason': 'error',
           'ultimate/no-silent-catch': 'error',
@@ -197,8 +214,12 @@ export default defineConfig({
     root: '.',
     globalSetup: ['test/sweep-temp.ts'],
     setupFiles: ['test/setup.ts'],
-    include: ['test/**/*.test.ts', artifactUnitTests],
-    exclude: ['test/e2e/**', '.ultimate/extensions/artifacts/test/e2e/**'],
+    include: ['test/**/*.test.ts', artifactUnitTests, ...fleetUnitTests],
+    exclude: [
+      'test/e2e/**',
+      '.ultimate/extensions/artifacts/test/e2e/**',
+      '.ultimate/extensions/fleet/test/e2e/**',
+    ],
     testTimeout: 30000,
     // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
     hookTimeout: 5000,
