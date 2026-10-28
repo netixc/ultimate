@@ -39,8 +39,7 @@ import type { BranchInput } from '../extensions/lineage/server.ts'
 import { Branch, Roots } from '../extensions/lineage/api.ts'
 import { Standing, Subagents } from '../extensions/subagents/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
-import { concludedIn } from '../extensions/conversations/server.ts'
-import { UiState } from '../server/ui-state.ts'
+import { concludeIn, concludedIn } from '../extensions/conversations/server.ts'
 
 const homes: string[] = []
 const hosts: OpenHost[] = []
@@ -304,6 +303,7 @@ async function fixture(
   }
   return {
     host,
+    registry: prepared.registry,
     provided,
     get opened() {
       return opened
@@ -1490,18 +1490,55 @@ it("leaves a branch's final answer as a note while its work is under way", async
   ).toHaveLength(0)
   view.dispose()
 })
-it('leaves the final answer of a branch its landing concluded as a note, since the landing woke the starter', async () => {
+it('leaves an existing final answer routed after landing conclusion as a note', async () => {
   const f = await fixture()
   const b = await branched(f)
-  await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.concluded'] = [b.id]
-  }, context)
-  // Its answer is routed after the lander concluded it: the starter already woke with the landing card.
-  await b.later('Done')
-  await until(async () => (await b.from()).length === 2)
-  const [, routed] = await b.from()
-  expect(routed).toMatchObject({ reply: false })
-  expect(routed.report).toBeUndefined()
+  const held = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const messages = f.registry.snapshot().extension('messages')!
+  f.registry.install(
+    defineExtension({
+      ...messages,
+      tasks: messages.tasks!.map((registration) => {
+        if (registration.definition.name !== 'board.route') return registration
+        const task = registration as unknown as Task<
+          JsonValue,
+          { phase: 'observe' },
+          JsonValue,
+          object
+        >
+        const observe = task.definition.phases.observe
+        return {
+          definition: {
+            ...task.definition,
+            phases: {
+              observe: async (...args: Parameters<typeof observe>) => {
+                if (args[1].conversationId === b.id) {
+                  held.resolve()
+                  await awaitWithContext(release.promise, args[2])
+                }
+                await observe(...args)
+              },
+            },
+          },
+        }
+      }),
+    }),
+  )
+  try {
+    // The input finishes before conclusion; only its background answer observer is late.
+    await (await b.branch.submit({ type: 'input', content: 'Done' }, context)).wait(context)
+    await held.promise
+    await b.branch.waitForIdle(context)
+    await f.opened.harness.commit((tx) => concludeIn(f.host, tx, [b.branch.id]), context)
+    release.resolve()
+    await b.settled()
+    const [, routed] = await b.from()
+    expect(routed).toMatchObject({ reply: false })
+    expect(routed.report).toBeUndefined()
+  } finally {
+    release.resolve()
+  }
 })
 it("leaves a branch's answer as a note while a subagent's report is still on its way", async () => {
   const f = await fixture()

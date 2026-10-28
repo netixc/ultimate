@@ -102,6 +102,88 @@ const cursor = async (server: Server) =>
     'lineage/landing-notes'
   ] ?? 0
 
+it.concurrent('keeps a branch open when its run active at landing is stopped before the decision', async () => {
+  const ordinaryGate = Promise.withResolvers<void>()
+  const ordinaryHeld = Promise.withResolvers<void>()
+  const reportGate = Promise.withResolvers<void>()
+  const reportHeld = Promise.withResolvers<void>()
+  const setup = (prepared: Awaited<ReturnType<typeof prepareFauxServer>>) => {
+    const extension = prepared.host.registry.snapshot().extension('workspaces')!
+    prepared.host.registry.install(
+      defineExtension({
+        ...extension,
+        tasks: extension.tasks!.map((registration) => {
+          if (registration.definition.name !== 'workspaces.lander') return registration
+          const task = registration as ReturnType<typeof createLander>
+          const report = task.definition.phases.report
+          return {
+            definition: {
+              ...task.definition,
+              phases: {
+                ...task.definition.phases,
+                report: async (...args: Parameters<typeof report>) => {
+                  if (args[0].state.checkpoint.frontier) {
+                    reportHeld.resolve()
+                    await awaitWithContext(reportGate.promise, args[2])
+                  }
+                  await report(...args)
+                },
+              },
+            },
+          }
+        }),
+      }),
+    )
+    const route: FauxResponseFactory = async (transcript, options) => {
+      prepared.host.faux!.appendResponses([route])
+      const last = transcript.messages.findLast((message) => message.role === 'user')!
+      if (textOf(last.content) === 'Ordinary work') {
+        ordinaryHeld.resolve()
+        await Promise.race([
+          ordinaryGate.promise,
+          new Promise((_, reject) =>
+            options?.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+          ),
+        ])
+      }
+      return fauxAssistantMessage('Answered.')
+    }
+    return route
+  }
+  const { server } = await fixture(undefined, setup)
+  const id = await branchFrom(server, { from: 1, prompt: 'Land me' })
+  const branch = await settled(server, id)
+  try {
+    // No requestId: track the Pi input receipt itself, not a message-specific address.
+    const input = await branch.submit({ type: 'input', content: 'Ordinary work' }, context)
+    await ordinaryHeld.promise
+    const run = (await server.harness.snapshot(LiveDoc, id, context))!.run!.taskId
+    const task = await reportLanding(server, id)
+    await reportHeld.promise
+    const frontier = (await server.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+      .pendingReports.callback.frontier!
+    expect(frontier.runs).toContainEqual({ conversationId: id, inputs: [input.id] })
+    await server.harness.abortTask(run, context)
+    await server.harness.waitForTask(run, context)
+    expect(await input.wait(context)).toMatchObject({ status: 'unanswered', reason: 'aborted' })
+    await branch.waitForIdle(context)
+    expect((await server.harness.snapshot(LiveDoc, id, context))!.run).toBeUndefined()
+    reportGate.resolve()
+    await until(() => landerEnded(server, task))
+    expect((await landerTask(server, task))!.state).toMatchObject({
+      status: 'terminal',
+      outcome: { status: 'completed' },
+    })
+    expect(await concluded(server)).not.toContain(id)
+    expect(
+      (await server.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.pendingReports,
+    ).toEqual({})
+  } finally {
+    ordinaryGate.resolve()
+    reportGate.resolve()
+  }
+})
+
 it.concurrent.each([
   { explicit: false, late: 'none' },
   { explicit: true, late: 'none' },

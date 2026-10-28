@@ -845,6 +845,7 @@ export function createLander(
               family: [branch],
               deliveries: [],
               reports: [],
+              runs: [],
               after:
                 (await tx.scanEntries({ conversationId: branch }, 1)).items[0]?.id ??
                 (0 as EntryId),

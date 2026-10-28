@@ -1,8 +1,9 @@
 /** The finite message/reply frontier drained by the lander's single conclusion decision. */
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { LandingRepliesService } from '../workspaces/api.ts'
+import type { LandingFrontier, LandingRepliesService } from '../workspaces/api.ts'
 import { Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { ReplySettlement } from '../subagents/api.ts'
 import type { Message } from './api.ts'
@@ -50,7 +51,10 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
       const conversations = [id]
       let after = 0
       const reports: { conversationId: ConversationId; requestId: string }[] = []
+      const runs: LandingFrontier['runs'] = []
       for (const member of conversations) {
+        const run = (await tx.doc(LiveDoc, member)).run
+        if (run) runs.push({ conversationId: member, inputs: [...run.inputs] })
         after = Math.max(
           after,
           (await tx.scanEntries({ conversationId: member }, 1)).items[0]?.id ?? 0,
@@ -97,7 +101,7 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
         }
         cursor = page.next
       } while (cursor)
-      return { family: conversations, after: after as EntryId, deliveries, reports }
+      return { family: conversations, after: after as EntryId, deliveries, reports, runs }
     },
     async settle(tx, frontier) {
       const entries = []
@@ -114,6 +118,27 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
       }
       const replies = await settle(tx, frontier.deliveries)
       if (replies.state !== 'settled') return replies.state
+      // Only the internal chain is awaited. An ordinary run active at capture may now be
+      // idle because it was stopped or failed, not answered. Its input receipts survive
+      // generation handoffs; a still-pending receipt leaves the branch open immediately.
+      // Tx has no public submission(id) read. This committed-receipt scan runs before any
+      // table writes, within the serialized decision commit; no staged settlement is missed.
+      for (const run of frontier.runs) {
+        const remaining = new Set(run.inputs)
+        let cursor: Cursor | undefined
+        do {
+          const page = await host.scanSubmissions(
+            { conversationId: run.conversationId, order: 'descending' },
+            200,
+            cursor,
+            context,
+          )
+          for (const input of page.items)
+            if (remaining.delete(input.id) && input.status !== 'done') return 'unanswered'
+          cursor = page.next
+        } while (remaining.size && cursor)
+        if (remaining.size) return 'unanswered'
+      }
       // Only the frozen chain may extend the landing boundary. An unrelated input keeps the
       // branch open even when it already answered or failed before this transaction resumed.
       const allowed = new Set([...entries, ...replies.entries])

@@ -55,14 +55,14 @@ async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promis
   // A landing concludes the branch in the commit that ends its report and wakes the starter itself; an answer routed
   // after that, or for a branch concluded by hand, is not a report. Any input that runs the branch resumes it first.
   if ((await host.need(ConversationsApi).concludedIn(tx)).has(id)) return true
-  const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
-  if (queue.some((item) => item.conversationId === id)) return true
-  // A submission leaves the queue in the commit that moves the lander to reporting it.
-  for (const task of await live(tx, 'workspaces.lander')) {
-    const checkpoint = (task.state as { checkpoint?: { phase?: string; conversationId?: number } })
-      .checkpoint
-    if (checkpoint?.phase === 'report' && checkpoint.conversationId === id) return true
-  }
+  const index = await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)
+  if (index.queue.some((item) => item.conversationId === id)) return true
+  // Finish removes the queue entry atomically with this receipt. It owns the wake even if
+  // its task faults before deciding; a saved leave-open decision gives normal routing back.
+  if (
+    Object.values(index.pendingReports).some((item) => item.conversationId === id && !item.decision)
+  )
+    return true
   return working(tx, id)
 }
 /**

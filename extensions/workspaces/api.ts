@@ -3,7 +3,7 @@
  * Other extensions create, look up, land and discard a conversation's worktree through this service.
  */
 import type { Context } from '@earendil-works/chord'
-import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, SubmissionId, TaskId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { git } from '../../lib/git.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
@@ -47,6 +47,8 @@ export type LandingFrontier = {
   after: EntryId
   deliveries: TaskId[]
   reports: { conversationId: ConversationId; requestId: string }[]
+  /** Inputs of runs active at capture; generation handoffs keep these exact receipt IDs. */
+  runs: { conversationId: ConversationId; inputs: SubmissionId[] }[]
 }
 export type LandingRepliesService = {
   /** Freeze already admitted internal replies and the family's latest entry at landing. */

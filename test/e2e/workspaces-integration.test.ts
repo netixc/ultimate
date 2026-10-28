@@ -11,7 +11,7 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
-import type { ConversationId, JsonObject, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject, Task, TaskId, Tx } from '@earendil-works/pi-durable'
 import { afterAll, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
@@ -34,6 +34,7 @@ import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import {
   actions as conversationActions,
   concludeIn,
+  concludedIn,
   subject,
 } from '../../extensions/conversations/server.ts'
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
@@ -51,7 +52,7 @@ import { seedTally, temp, until } from '../helpers.ts'
 
 /** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
 const conversations = (service: Partial<ConversationsService>) =>
-  ({ setAutomaticSummaries, setStanding, ...service }) as ConversationsService
+  ({ setAutomaticSummaries, setStanding, concludedIn, ...service }) as ConversationsService
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -793,6 +794,7 @@ it.concurrent('emits one landed event and notes the root once, across a replayed
       after: (await tx.scanEntries({ conversationId: id }, 1)).items[0].id,
       deliveries: [],
       reports: [],
+      runs: [],
     }),
     conclude: async () => {},
     release: async () => [],
@@ -1188,6 +1190,104 @@ async function concluding() {
   return { f, id }
 }
 
+it.concurrent('keeps the starter wake with a faulted pending landing across a delayed answer and replacement', async () => {
+  const { f, id } = await concluding()
+  const gate = Promise.withResolvers<void>()
+  const observing = Promise.withResolvers<TaskId>()
+  const messages = f.prepared.registry.snapshot().extension('messages')!
+  f.prepared.registry.install(
+    defineExtension({
+      ...messages,
+      tasks: messages.tasks!.map((registration) => {
+        if (registration.definition.name !== 'board.route') return registration
+        const task = registration as unknown as Task<JsonObject, { phase: 'observe' }, null, object>
+        const observe = task.definition.phases.observe
+        return {
+          definition: {
+            ...task.definition,
+            phases: {
+              observe: async (...args: Parameters<typeof observe>) => {
+                if (args[1].conversationId === id) {
+                  observing.resolve(args[0].id)
+                  await gate.promise
+                }
+                await observe(...args)
+              },
+            },
+          },
+        }
+      }),
+    }),
+  )
+  const landing = f.service.Lander
+  let faulted = false
+  f.prepared.registry.install(
+    defineExtension({
+      ...workspaceExtension(f.host),
+      tasks: [
+        ...(workspaceExtension(f.host).tasks ?? []).filter(
+          (task) => task.definition.name !== landing.definition.name,
+        ),
+        {
+          definition: {
+            ...landing.definition,
+            phases: {
+              ...landing.definition.phases,
+              report: async (...args: Parameters<typeof landing.definition.phases.report>) => {
+                if (!faulted) {
+                  faulted = true
+                  throw new Error('held report fault')
+                }
+                await landing.definition.phases.report(...args)
+              },
+            },
+          },
+        },
+      ],
+    }),
+  )
+  try {
+    const branch = (await f.opened.harness.conversation(id, context))!
+    await (await branch.submit({ type: 'input', content: 'Ready to land' }, context)).wait(context)
+    const routing = await observing.promise
+    await branch.waitForIdle(context)
+    const { id: submission } = await f.service.submit(id, 'None', context)
+    const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    const first = Object.values((await index())!.landers)[0] as TaskId
+    await until(
+      async () =>
+        (await f.opened.harness.commit((tx) => tx.task(first), context))?.state.status ===
+        'terminal',
+    )
+    expect((await index())!.pendingReports[submission].decision).toBeUndefined()
+    gate.resolve()
+    await until(
+      async () =>
+        (await f.opened.harness.commit((tx) => tx.task(routing), context))?.state.status ===
+        'terminal',
+    )
+    await until(async () => (await messageLog(f)).some((message) => message.from === id))
+    const update = (await messageLog(f)).find((message) => message.from === id)!
+    expect(update.report).toBeUndefined()
+    await f.reopen()
+    await submitted(f, id)
+    await until(async () => Object.keys((await index())!.pendingReports).length === 0)
+    await f.opened.root.waitForIdle(context)
+    const entries = (await f.opened.root.context(context)).entries
+    const wakes = entries.filter(
+      (entry) =>
+        entry.input &&
+        (entry.kind === 'board.message' || entry.kind === 'workspaces.lander-report'),
+    )
+    expect(wakes.map((entry) => entry.kind)).toEqual(['workspaces.lander-report'])
+    expect(await concludedIds(f)).toContain(id)
+    expect((await f.opened.harness.commit((tx) => tx.task(routing), context))!.state).toMatchObject(
+      { status: 'terminal', outcome: { status: 'completed' } },
+    )
+  } finally {
+    gate.resolve()
+  }
+})
 it.concurrent('notes a clean landing without a branch run, concludes and releases it, and wakes its starter once across replay', async () => {
   const { f, id } = await concluding()
   const workspace = (await f.service.get(id, context))!
