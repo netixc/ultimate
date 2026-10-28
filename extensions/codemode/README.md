@@ -69,6 +69,8 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 `store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Store writes are saved only when the script finishes successfully; a yielded wait discards them. The document is exported in `docs` for SSE subscriptions.
 
+Each value passed to `store()` is limited to **262144 characters of JSON** (`JSON.stringify(value).length`); a larger value throws a `RangeError`. Keep large tool results in script variables and store only IDs or small summaries needed by later calls.
+
 **Crash window:** Pi Durable has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 
 ## Summaries

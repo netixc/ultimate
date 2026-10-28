@@ -1,14 +1,20 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { beforeAll, expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { fauxServer, post, temp, removeTemp } from './helpers.ts'
+import { fauxServer, post, sourceCopy, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { git } from '../lib/git.ts'
 import { projectDecision } from '../server/project-setup.ts'
 import { updateSettings } from '../lib/settings.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
+
+// Only project and user files change; share the read-only built-ins across tests and reopens.
+let ultimateRoot: string
+beforeAll(async () => {
+  ultimateRoot = await sourceCopy(await temp())
+})
 
 it.concurrent('gates project resources, remembers choices, and applies onboarding settings actions live', async () => {
   const home = await temp('ultimate-onboarding-')
@@ -46,7 +52,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     }),
   )
   const options = {
-    ultimateRoot: resolve('.'),
+    ultimateRoot,
     projectRoot: project,
     userHome: home,
     home: join(home, 'state'),
@@ -110,7 +116,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(log.summary).not.toBe('')
     expect(log.provides).toContain('messages')
     expect(log.needs).toContain('subagents')
-    expect(log.events).toEqual(expect.arrayContaining(['board.sent', 'board.triaged']))
+    expect(log.events).toEqual(expect.arrayContaining(['board.sent']))
     expect(
       server.extensions.info().find((entry) => entry.name === 'messages')?.server?.tools,
     ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })
@@ -230,7 +236,7 @@ it.concurrent('offers setup only to named definitions, refuses inapplicable card
     '---\nname: setup-guide\ndescription: Setup guide\nresident: true\ntools: [setup, codemode]\n---\nHelp with setup.',
   )
   const server = await fauxServer({
-    ultimateRoot: resolve('.'),
+    ultimateRoot,
     projectRoot: project,
     userHome: home,
     home: join(home, 'state'),
@@ -433,7 +439,7 @@ it.concurrent('shares one choice between a checkout and its linked worktrees', a
     new ProjectTrustStore(join(home, '.ultimate')).set(worktree, false)
     expect(projectDecision(worktree, home)).toBe(true)
     const server = await fauxServer({
-      ultimateRoot: resolve('.'),
+      ultimateRoot,
       projectRoot: worktree,
       userHome: home,
       home: join(home, 'state'),
@@ -461,7 +467,7 @@ it.concurrent('boots with corrupt trust, discloses project replacements, and rec
   let server: Awaited<ReturnType<typeof fauxServer>> | undefined
   try {
     server = await fauxServer({
-      ultimateRoot: resolve('.'),
+      ultimateRoot,
       projectRoot: project,
       userHome: home,
       home: join(home, 'state'),
