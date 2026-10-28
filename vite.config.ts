@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite-plus'
+import { artifactUnitTests } from './.ultimate/extensions/artifacts/test/config.ts'
 export default defineConfig({
   root: 'web',
   plugins: [react(), tailwindcss()],
@@ -23,15 +24,15 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ['test/**'],
-        excludeFiles: ['test/e2e/**'],
+        files: ['test/**', '.ultimate/extensions/artifacts/test/**'],
+        excludeFiles: ['test/e2e/**', '.ultimate/extensions/artifacts/test/e2e/**'],
         rules: {
           'ultimate/no-test-timeout': 'error',
           'ultimate/no-real-wait-in-fast-tests': 'error',
         },
       },
       {
-        files: ['test/**'],
+        files: ['test/**', '.ultimate/extensions/artifacts/test/**'],
         excludeFiles: ['test/helpers.ts'],
         rules: { 'ultimate/no-local-test-polling': 'error' },
       },
@@ -41,7 +42,7 @@ export default defineConfig({
       },
       {
         files: ['**/*'],
-        excludeFiles: ['test/**'],
+        excludeFiles: ['test/**', '.ultimate/extensions/artifacts/test/**'],
         rules: {
           'ultimate/replay-safe-reason': 'error',
           'ultimate/no-silent-catch': 'error',
@@ -196,8 +197,8 @@ export default defineConfig({
     root: '.',
     globalSetup: ['test/sweep-temp.ts'],
     setupFiles: ['test/setup.ts'],
-    include: ['test/**/*.test.ts'],
-    exclude: ['test/e2e/**'],
+    include: ['test/**/*.test.ts', artifactUnitTests],
+    exclude: ['test/e2e/**', '.ultimate/extensions/artifacts/test/e2e/**'],
     testTimeout: 30000,
     // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
     hookTimeout: 5000,

@@ -8,7 +8,8 @@
   },
   "isolates": {
     "worktree": {
-      "setup": ["pnpm install --frozen-lockfile --prefer-offline"]
+      "setup": ["pnpm install --frozen-lockfile --prefer-offline"],
+      "remove": "node scripts/remove-artifacts-worktree.ts {path}"
     }
   },
   "lander": {

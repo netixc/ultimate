@@ -6,6 +6,7 @@
   },
   "type": "module",
   "scripts": {
+    "pnpm:devPreinstall": "git submodule update --init -- .ultimate/extensions/artifacts",
     "dev": "node server/main.ts",
     "start": "node bin/ultimate.ts",
     "cli": "node bin/cli.ts",

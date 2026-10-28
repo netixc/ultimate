@@ -4,9 +4,14 @@ import { expect, it } from 'vitest'
 
 const root = new URL('../../', import.meta.url)
 const reference = readFileSync(new URL('docs/pi-upstream.md', root), 'utf8')
-const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
+const files = execFileSync('git', ['ls-files', '--stage', '-z'], {
+  cwd: root,
+  encoding: 'utf8',
+})
   .split('\0')
-  .filter(Boolean)
+  // A gitlink names a directory, not a file whose source can contain a Pi marker.
+  .filter((entry) => entry && !entry.startsWith('160000 '))
+  .map((entry) => entry.slice(entry.indexOf('\t') + 1))
 
 // Each entry names its file first ("- `path` — …"); backticks later in the prose are not paths.
 const borrowed = reference

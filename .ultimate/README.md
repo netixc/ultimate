@@ -14,6 +14,8 @@ This setup configures the repository's agents, worktrees, landing and review:
   parallel, and pushes to `origin`. A failure goes back to the submitting branch to fix and submit again.
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
+- `.ultimate/extensions/artifacts`: a pinned source submodule. Worktree setup initializes it before checks; the live
+  host still needs an explicit init/update and draft-safe reload. See [source and activation](../docs/artifacts-source.md).
 
 To adopt parts of this setup in another project, ask its @ultimate for a tour (the `adopt-ultimate-setup` skill);
 onboarding offers it too.

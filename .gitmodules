@@ -1,0 +1,3 @@
+[submodule "artifacts"]
+	path = .ultimate/extensions/artifacts
+	url = https://github.com/netixc/ultimate-artifacts.git
