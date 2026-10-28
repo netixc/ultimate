@@ -6,7 +6,7 @@ overlays still apply.
 
 Nothing is billable until a session starts or the Voice agent receives input. GPT-Live uses `OPENAI_API_KEY` from
 Secrets (⌘K → Secrets), or Pi's OpenAI **API key**, never its OAuth login. The key stays on the server. The Voice
-agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low thinking and the fast tier.
+agent uses `openai/gpt-6-luna` through Pi's configured OpenAI provider, with low thinking and the fast tier.
 
 ## Flow
 
