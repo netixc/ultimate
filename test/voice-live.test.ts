@@ -19,10 +19,7 @@ const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
   const path = join(ultimateRoot, 'extensions/voice-live/agents/voice.md')
-  await writeFile(
-    path,
-    (await readFile(path, 'utf8')).replace('openai-codex/gpt-6-luna', 'faux/faux-1'),
-  )
+  await writeFile(path, (await readFile(path, 'utf8')).replace('openai/gpt-6-luna', 'faux/faux-1'))
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
     JSON.stringify({ summaryModel: 'unavailable/test', extensions: { enable: ['voice-live'] } }),
