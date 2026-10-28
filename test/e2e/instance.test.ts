@@ -53,14 +53,40 @@ async function fixture({ foreign = false } = {}) {
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
   await git(source, 'switch', '-c', 'preview-source')
+  // Initialize the pinned private source without network access; this clone's worktrees share its local URL.
+  await git(
+    source,
+    'config',
+    'submodule.artifacts.url',
+    join(checkout, '.ultimate/extensions/artifacts'),
+  )
+  const initArtifacts = [
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'update',
+    '--init',
+    '--',
+    '.ultimate/extensions/artifacts',
+  ]
+  await git(source, ...initArtifacts)
   await cp(join(checkout, 'extensions/instance'), join(source, 'extensions/instance'), {
     recursive: true,
   })
   await symlink(join(checkout, 'node_modules'), join(source, 'node_modules'))
+  const settings = JSON.parse(await readFile(join(source, '.ultimate/settings.json'), 'utf8'))
   await writeFile(
     join(source, '.ultimate/settings.json'),
     JSON.stringify({
-      isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
+      isolates: {
+        worktree: {
+          ...settings.isolates.worktree,
+          setup: [
+            `git ${initArtifacts.join(' ')}`,
+            `ln -s '${join(checkout, 'node_modules')}' node_modules`,
+          ],
+        },
+      },
     }),
   )
   await writeFile(
