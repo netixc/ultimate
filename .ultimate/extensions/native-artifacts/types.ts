@@ -8,11 +8,6 @@ export type NativeDocument = {
   sourceError?: string
 }
 
-/** Unchanged polls transfer metadata only, keeping the existing document and annotation channel. */
-export type NativeReadResult =
-  | NativeDocument
-  | { unchanged: true; artifact: Artifact; sourceError?: string }
-
 export type TargetStatus = 'same' | 'changed' | 'missing'
 export type CaptureMode = 'view' | 'annotate'
 

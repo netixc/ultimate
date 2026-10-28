@@ -301,6 +301,10 @@ it.each([
     html: '<div style="width:100px;transform:scale(2);transform-origin:0 0"><div style="overflow:hidden;width:100px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></div></div>',
   },
   {
+    kind: 'an expanded overflow clip margin',
+    html: '<div style="width:100px;height:40px;overflow:clip;overflow-clip-margin:40px"><button style="display:block;width:120px;height:20px;padding:0;border:0">Fits</button></div>',
+  },
+  {
     kind: 'a display:contents ancestor',
     html: '<div style="display:contents;overflow:hidden;width:100px;height:30px"><button style="display:block;width:80px;height:20px;padding:0;border:0">Fits</button></div>',
   },

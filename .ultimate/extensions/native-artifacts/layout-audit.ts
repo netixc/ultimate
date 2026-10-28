@@ -109,6 +109,13 @@ export function auditLayout(selector: (element: Element) => string): LayoutDiagn
             incomplete('Non-box or inline clipping regions were not measured.')
             break
           }
+          if (
+            [parentStyle.overflowX, parentStyle.overflowY].includes('clip') &&
+            parentStyle.overflowClipMargin !== '0px'
+          ) {
+            incomplete('Non-default overflow clip margins were not measured.')
+            break
+          }
           clippingRegion ||= cx || cy || sx || sy
           if (
             clippingRegion &&
