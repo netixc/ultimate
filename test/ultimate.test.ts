@@ -49,15 +49,23 @@ beforeAll(async () => {
 })
 async function fixture({
   onRequest,
-  editSource = false,
+  edit,
 }: {
   onRequest?: (text: string, home: string) => Promise<void>
-  editSource?: boolean
+  edit?: 'project' | 'source'
 } = {}) {
   const home = await temp('ultimate-agent-')
   homes.push(home)
-  // User files and durable homes stay private; only tests editing built-ins or project overlays need a source copy.
-  const root = editSource ? await source(home) : sharedRoot
+  // Project overlays need their own project, not another copy and load of every built-in server facet.
+  const root = edit === 'source' ? await source(home) : sharedRoot
+  const projectRoot = edit === 'project' ? join(home, 'project') : root
+  if (edit === 'project') {
+    await mkdir(join(projectRoot, '.ultimate/agents'), { recursive: true })
+    await writeFile(
+      join(projectRoot, '.ultimate/settings.json'),
+      JSON.stringify({ summaryModel: 'unavailable/test' }),
+    )
+  }
   await mkdir(join(home, '.ultimate/agents'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/agents/dice.md'),
@@ -72,6 +80,7 @@ async function fixture({
   const open = async () => {
     const server = await fauxServer({
       ultimateRoot: root,
+      projectRoot,
       home: join(home, 'state'),
       userHome: home,
       // The first model is the default; the second reasons, so a definition can pin a thinking level.
@@ -113,7 +122,7 @@ async function fixture({
       return response.data.result as ConversationId
     },
   }
-  return { home, root, server, subagents, requests, open }
+  return { home, root: projectRoot, server, subagents, requests, open }
 }
 /** A model Pi knows, on a provider with no login in tests. */
 const dead = 'anthropic/claude-opus-5.5'
@@ -191,7 +200,7 @@ it.concurrent('has no lineage action that starts a branch without routing its an
 })
 
 it.concurrent('starts a lineage branch with a message input and caller attribution, returns its answer, and selects roots', async () => {
-  const f = await fixture({ editSource: true })
+  const f = await fixture({ edit: 'project' })
   await seedTally(f.server.harness)
   const ultimate = await f.subagents.standing('ultimate', context)
   // A project overlay pins the coordinator's model; `max` exceeds what the model supports and clamps to `high`. Its
@@ -440,7 +449,7 @@ async function agentInstructions(f: Awaited<ReturnType<typeof fixture>>, id: Con
 }
 
 it.concurrent('re-applies an updated @ultimate definition on a typed input and notes changed instructions once', async () => {
-  const f = await fixture({ editSource: true })
+  const f = await fixture({ edit: 'source' })
   const ultimate = await f.subagents.standing('ultimate', context)
   const notes = async () =>
     (await entries(f.server, ultimate)).filter((entry) => entry.kind === 'prompt.build')
