@@ -24,8 +24,8 @@ An idle recipient wakes. A busy one receives a follow-up after its current run, 
 `steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including `@lander` and other
 standing agents, and to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
 field records `steer` or `followUp`.
-The answer returns as `board.reply`, steering the sender. Its model text explains that the next final answer
-stays local; use `message` if the replying agent needs a decision or follow-up. An unanswered input produces a
+The answer returns as `board.reply`, steering the sender. Its model text explains that the reply needs no acknowledgement:
+normal answer/report routing still applies; follow up only if a decision or further work is needed. An unanswered input produces a
 failure reply instead.
 Answer a `board.message` directly rather than messaging the sender. A reply-enabled agent message back to a sender whose
 reply-enabled message the agent has received and not answered becomes that answer: in one commit `send()` marks the
