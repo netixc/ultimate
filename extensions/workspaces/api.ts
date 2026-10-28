@@ -3,6 +3,7 @@
  * Other extensions create, look up, land and discard a conversation's worktree through this service.
  */
 import type { Context } from '@earendil-works/chord'
+import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { git } from '../../lib/git.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
@@ -14,7 +15,7 @@ export type WorkspaceService = {
   get: Implementation['get']
   /** Give conversation `id` a new worktree of `cwd`'s repository inside `tx`; throws when `cwd` cannot be isolated. */
   create: Implementation['create']
-  /** Fast-forward the source checkout to the worktree tip of `id`, as `workspace land` does; returns what landed. */
+  /** Fast-forward the worktree of `id`'s owner to the worktree tip of subagent `id`; returns what landed. */
   land: Implementation['land']
   /** Remove the worktree of `id` without landing it. */
   discard: Implementation['discard']
@@ -32,18 +33,27 @@ export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
 
 export { CheckRan, SubmissionLanded } from './refs.ts'
 export type { LandedData } from './refs.ts'
-export type HandoffService = {
-  /**
-   * Send a one-way message from conversation `from` to `input.to` (a standing agent's `@name`), once per `requestId`;
-   * returns its message id. The lander hands a landed commit to the deploy agent with it.
-   */
-  send(
-    from: number,
-    input: { to: string; text: string; reply: false },
-    requestId: string,
-    ctx: Context,
-  ): Promise<number>
+export type BranchesService = {
+  /** The conversation that started branch `id`, which hears that its submission landed. */
+  starter(id: ConversationId, ctx: Context): Promise<number | undefined>
+  /** Inside `tx`: whether branch `id` has work of its own that will wake it again, so a landing leaves it open. */
+  working(tx: Tx, id: ConversationId): Promise<boolean>
 }
-/** The extension point through which the lander messages a standing agent; messages provides it. `want` it. */
-export const Handoff = defineApi<HandoffService>()('workspaces.handoff')
+/** What a landing asks about the branch it landed; messages provides it. `want` it. */
+export const Branches = defineApi<BranchesService>()('workspaces.branches')
+/** The finite internal reply chain admitted at a landing, and the input boundary it may extend. */
+export type LandingFrontier = {
+  family: ConversationId[]
+  after: EntryId
+  deliveries: TaskId[]
+  reports: { conversationId: ConversationId; requestId: string }[]
+}
+export type LandingRepliesService = {
+  /** Freeze already admitted internal replies and the family's latest entry at landing. */
+  capture(tx: Tx, id: ConversationId): Promise<LandingFrontier>
+  /** Drain only that chain; new inputs, unanswered callbacks and stopped runs leave the branch open. */
+  settle(tx: Tx, frontier: LandingFrontier): Promise<'pending' | 'settled' | 'unanswered'>
+}
+/** Messages supplies exact delivery and subagent-report receipts to the single lander route. */
+export const LandingReplies = defineApi<LandingRepliesService>()('workspaces.landing-replies')
 export const tier = 'core'

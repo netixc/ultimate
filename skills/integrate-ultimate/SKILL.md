@@ -35,19 +35,19 @@ Gather evidence, citing file:line, before forming opinions.
 
 Map the findings to Ultimate's building blocks:
 
-| Need                                        | Building block                                                                |
-| ------------------------------------------- | ----------------------------------------------------------------------------- |
-| The agent should know project rules         | `AGENTS.md`/`CLAUDE.md` (already read), or a skill in `.ultimate/skills/`     |
-| A recurring multi-step workflow             | a skill (`.pi/skills/` or `.ultimate/skills/`), driven from the conversation  |
-| A specialist role                           | an agent definition in `.ultimate/agents/<name>.md`                           |
-| Seeing and acting on the domain's things    | an extension with a **surface** (a full-screen app) or a panel                |
-| A deterministic operation                   | an extension **action** or **tool** that reuses the project's scripts         |
-| A long-running process (dev server, render) | a server facet that manages a child process and cleans up `onClose`           |
-| An API key                                  | declare it with `secrets` and read it server-side only                        |
-| Recurring work                              | `automations`                                                                 |
-| Review by several models, one verdict       | a review team in `agents/` (see "Review team and lander")                     |
-| Checks and a push on every landing          | `lander` settings, optionally a `lander` agent (see "Review team and lander") |
-| Which built-ins are on                      | `.ultimate/settings.json` `extensions.enable`                                 |
+| Need                                        | Building block                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------- |
+| The agent should know project rules         | `AGENTS.md`/`CLAUDE.md` (already read), or a skill in `.ultimate/skills/`    |
+| A recurring multi-step workflow             | a skill (`.pi/skills/` or `.ultimate/skills/`), driven from the conversation |
+| A specialist role                           | an agent definition in `.ultimate/agents/<name>.md`                          |
+| Seeing and acting on the domain's things    | an extension with a **surface** (a full-screen app) or a panel               |
+| A deterministic operation                   | an extension **action** or **tool** that reuses the project's scripts        |
+| A long-running process (dev server, render) | a server facet that manages a child process and cleans up `onClose`          |
+| An API key                                  | declare it with `secrets` and read it server-side only                       |
+| Recurring work                              | `automations`                                                                |
+| Review by several models, one verdict       | a review team in `agents/` (see "Review team and lander")                    |
+| Checks and a push on every landing          | `lander` settings (see "Review team and lander")                             |
+| Which built-ins are on                      | `.ultimate/settings.json` `extensions.enable`                                |
 
 Propose **2–4 ranked suggestions**, not a catalogue. For each, say what the user sees, what it reuses, and what it needs (secrets, processes, costs). Principles:
 
@@ -74,18 +74,16 @@ Worker reports and submissions state divergence from the task as given (agreemen
   user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
-- **Project tools or settings for a built-in agent** (@ultimate, the lander): never copy its definition. Add
+- **Project tools or settings for a built-in agent** (@ultimate, the coordinator): never copy its definition. Add
   an overlay, a file of the same name marked by `addTools: [tool]` (`[]` when it only changes settings). It may
-  override any setting (`model`, `thinking`, `onFailure`, `description`, …) but never `tools`, and its optional body
+  override any setting (`model`, `thinking`, `description`, …) but never `tools`, and its optional body
   is appended to the built-in instructions as project additions; a copy stops following the built-in and the setup
   check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
   runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
-  runs the worktree setup below first. To let the lander's model resolve
-  conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
-  tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
-  `extensions/workspaces/README.md`.
+  runs the worktree setup below first. The lander runs no model: a conflict or a failing check goes back to the
+  submitting branch, which fixes it and submits again. Details: `extensions/workspaces/README.md`.
 
 Before promising checked and pushed delivery, verify the target host's project choice and effective **project**
 `lander.checks` and `lander.push`. The lander reads only `host.projectSettings()`; user lander settings do not apply,

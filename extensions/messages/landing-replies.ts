@@ -1,9 +1,9 @@
-/** The finite message/reply frontier used by lineage's existing landed-branch conclusion. */
+/** The finite message/reply frontier drained by the lander's single conclusion decision. */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { LandingRepliesService } from '../lineage/api.ts'
-import { SubagentsApi } from '../subagents/api.ts'
+import type { LandingRepliesService } from '../workspaces/api.ts'
+import { Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { ReplySettlement } from '../subagents/api.ts'
 import type { Message } from './api.ts'
 import type { DeliveryReceipt } from './delivery.ts'
@@ -46,7 +46,30 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
     return { state: 'settled', entries }
   }
   return {
-    async admitted(tx, conversations) {
+    async capture(tx, id) {
+      const conversations = [id]
+      let after = 0
+      const reports: { conversationId: ConversationId; requestId: string }[] = []
+      for (const member of conversations) {
+        after = Math.max(
+          after,
+          (await tx.scanEntries({ conversationId: member }, 1)).items[0]?.id ?? 0,
+        )
+        const children = await tx.doc(Subagents, member)
+        for (const child of Object.values(children.agents)) conversations.push(child.conversationId)
+        for (const action of Object.values(children.actions)) {
+          const requestId = `subagent:${action.reporter}`
+          const input = await tx.submissionByRequest(action.conversationId, requestId)
+          // The child already answered at landing, but its parent report may still be queued.
+          // Freeze that exact causal input too; an ongoing child's future answer is new work.
+          if (
+            input?.status === 'done' &&
+            input.type === 'input' &&
+            (await host.need(SubagentsApi).settleReply(tx, input)).state === 'pending'
+          )
+            reports.push({ conversationId: action.conversationId, requestId })
+        }
+      }
       const family = new Set(conversations)
       const deliveries: TaskId[] = []
       let cursor: Cursor | undefined
@@ -74,8 +97,39 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
         }
         cursor = page.next
       } while (cursor)
-      return deliveries
+      return { family: conversations, after: after as EntryId, deliveries, reports }
     },
-    settle,
+    async settle(tx, frontier) {
+      const entries = []
+      for (const report of frontier.reports) {
+        const input = await tx.submissionByRequest(report.conversationId, report.requestId)
+        if (!input) return 'unanswered'
+        const settled = await host.need(SubagentsApi).settleReply(tx, input)
+        entries.push(...settled.entries)
+        if (settled.state === 'pending') {
+          await host.need(SubagentsApi).recoverReply(tx, input)
+          return 'pending'
+        }
+        if (settled.state === 'unanswered') return 'unanswered'
+      }
+      const replies = await settle(tx, frontier.deliveries)
+      if (replies.state !== 'settled') return replies.state
+      // Only the frozen chain may extend the landing boundary. An unrelated input keeps the
+      // branch open even when it already answered or failed before this transaction resumed.
+      const allowed = new Set([...entries, ...replies.entries])
+      for (const member of frontier.family) {
+        let cursor: Cursor | undefined
+        do {
+          const page = await tx.scanEntries(
+            { conversationId: member, minEntryId: (frontier.after + 1) as EntryId },
+            200,
+            cursor,
+          )
+          if (page.items.some((entry) => entry.input && !allowed.has(entry.id))) return 'unanswered'
+          cursor = page.next
+        } while (cursor)
+      }
+      return 'settled'
+    },
   }
 }

@@ -12,9 +12,9 @@ import {
 import type { ConversationId, GenerationResult, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Handoff, WorkspacesApi } from '../workspaces/api.ts'
+import { Branches, LandingReplies, WorkspacesApi } from '../workspaces/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
-import { LandingReplies, LineageApi } from '../lineage/api.ts'
+import { LineageApi } from '../lineage/api.ts'
 import { Messages, MessagesApi } from './api.ts'
 import { gist, openQuestion, openQuestionsNote, questionsParameter } from './questions.ts'
 import { callerOf } from './caller.ts'
@@ -22,10 +22,10 @@ import { CallerAction } from './refs.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, SCAN_PAGE } from './images.ts'
-import { lander, parentOf, Started, starterOf } from './addresses.ts'
+import { parentOf, Started, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { send } from './send.ts'
-import { route } from './route.ts'
+import { route, working } from './route.ts'
 import { remoteAction, remoteReplyAction, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
 import { landingReplies } from './landing-replies.ts'
@@ -70,7 +70,6 @@ export const actions = {
         ...a,
         ...(index?.[a.name] === undefined ? {} : { id: index[a.name] }),
       })),
-      lander: await lander(host, BACKGROUND_CONTEXT),
       conversations,
     }
   },
@@ -82,10 +81,11 @@ export default function messages(host: ExtensionHost) {
   host.need(LineageApi)
   host.need(SubagentsApi)
   host.need(WorkspacesApi)
+  // What a landing asks about its branch, through workspaces' extension point, so workspaces does not depend on messages.
   host.implement(LandingReplies, landingReplies(host))
-  // The lander's deploy handoff, through workspaces' extension point, so workspaces does not depend on messages.
-  host.implement(Handoff, {
-    send: (from, input, requestId, ctx) => send(host, from, input, ctx, { requestId }),
+  host.implement(Branches, {
+    starter: (id, ctx) => starterOf(host, id, ctx),
+    working: (tx, id) => working(tx, id),
   })
   host.implement(MessagesApi, {
     answer: async (messageId, text, ctx, device) => {

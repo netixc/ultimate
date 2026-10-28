@@ -65,19 +65,9 @@ document, tools and model-facing text, where agents and stored entries already u
   `'root'` needs `source.from` and errors if it has no root. Successful landings leave a note in the submitter's root
   (unless it is that root or has none): the reactor `lineage/landing-notes` handles each `workspaces.landed` event
   once, placing the note in a tally inside its own transaction, or, for a root that is no tally yet, creating a
-  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
-  reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
-  first freezes already admitted reply deliveries within the branch's owned tree, through the
-  `lineage.landing-replies` point that messages fills, then waits for the lander's report (`lander:<submission>`) to be
-  answered and the submitter to go idle. The early snapshot retains failures that occur while the report is running.
-  Their durable callback addresses (including a linked replacement delivery for an explicit answer), child answers
-  and exact parent report receipts must settle before closing; subagents admits any missing recovery Reporter in
-  that same check, so an idle child alone is not proof.
-  New inputs outside those receipts leave the branch open, as do unanswered callbacks, open outgoing questions,
-  queued input or still-running subagents. The final receipt/input check, `ConversationsApi.concludeIn` and the task's
-  next phase commit together, so a replay never concludes twice; freeing the worktree follows as its own phase. A report that ends
-  unanswered (a provider error, a Stop, a reset) or a lander that goes idle without sending it (aborted) ends the task
-  and leaves the branch open, for watchdog's idle-branches note. Any later input resumes the branch. The
+  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`).
+  Concluding the landed branch and waking its starter belongs to the model-free lander, including settlement of
+  already admitted internal replies before its final decision (`extensions/workspaces/README.md`). The
   note has `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
   divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a
