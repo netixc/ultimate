@@ -38,8 +38,8 @@ request arrive, then answer it, or use `reply: false` for a one-way update.
 `reply: false` updates and other recipients are unaffected. @ultimate's message to `user` is never refused for an
 owed answer: while a user's message it has read is open, the message answers it (marked `answered`, the new one
 names it in `re`, its delivery keeps the final answer local) and, with `questions`, stays open itself, so a
-conversation such as the onboarding walkthrough can ask one card after another. A message still queued is unread
-and is never treated as owed: a message to its sender then goes as a new message, and the queued one gets its own
+conversation such as the onboarding walkthrough can ask one card after another. A user's message still queued is unread
+and is never treated as owed: a message to the user then goes as a new message, and the queued one gets its own
 turn and its own answer.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
