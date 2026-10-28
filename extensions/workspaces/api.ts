@@ -46,7 +46,10 @@ export type LandingFrontier = {
   family: ConversationId[]
   after: EntryId
   deliveries: TaskId[]
-  reports: { conversationId: ConversationId; requestId: string }[]
+  reports: (
+    | { conversationId: ConversationId; requestId: string }
+    | { parent: ConversationId; answer: EntryId }
+  )[]
   /** Inputs of runs active at capture; generation handoffs keep these exact receipt IDs. */
   runs: { conversationId: ConversationId; inputs: SubmissionId[] }[]
 }

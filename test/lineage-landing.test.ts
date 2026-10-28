@@ -27,7 +27,14 @@ import { emit, EventLog } from '../server/events.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
 import { prepareFauxServer, until } from './helpers.ts'
-import { branchFrom, fixture, servers, settled, textOf } from './lineage-fixture.ts'
+import {
+  branchFrom,
+  fixture,
+  second as secondConversation,
+  servers,
+  settled,
+  textOf,
+} from './lineage-fixture.ts'
 import type { Server } from './lineage-fixture.ts'
 
 const landing = (submission: string, conversationId: number): LandedData => ({
@@ -102,6 +109,160 @@ const cursor = async (server: Server) =>
   (await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.cursors[
     'lineage/landing-notes'
   ] ?? 0
+
+it.concurrent('drains an already admitted recovery Reporter before deciding a landing', async () => {
+  const reporterHeld = Promise.withResolvers<void>()
+  const reporterGate = Promise.withResolvers<void>()
+  const checked = Promise.withResolvers<void>()
+  const setup = (prepared: Awaited<ReturnType<typeof prepareFauxServer>>) => {
+    for (const name of ['subagents', 'workspaces']) {
+      const extension = prepared.host.registry.snapshot().extension(name)!
+      prepared.host.registry.install(
+        defineExtension({
+          ...extension,
+          tasks: extension.tasks!.map((registration) => {
+            if (registration.definition.name === 'ultimate.subagent-reporter') {
+              const task = registration as unknown as Task<
+                { answer?: number },
+                { phase: 'report' },
+                null,
+                object
+              >
+              const report = task.definition.phases.report
+              return {
+                definition: {
+                  ...task.definition,
+                  phases: {
+                    ...task.definition.phases,
+                    report: async (...args: Parameters<typeof report>) => {
+                      if (args[0].input.answer !== undefined) {
+                        reporterHeld.resolve()
+                        await awaitWithContext(reporterGate.promise, args[2])
+                      }
+                      await report(...args)
+                    },
+                  },
+                },
+              }
+            }
+            if (registration.definition.name === 'workspaces.lander') {
+              const task = registration as ReturnType<typeof createLander>
+              const report = task.definition.phases.report
+              return {
+                definition: {
+                  ...task.definition,
+                  phases: {
+                    ...task.definition.phases,
+                    report: async (...args: Parameters<typeof report>) => {
+                      const [current, runtime, ctx] = args
+                      await report(
+                        current,
+                        {
+                          ...runtime,
+                          commit: async (...values: Parameters<typeof runtime.commit>) => {
+                            await runtime.commit(...values)
+                            if (current.state.checkpoint.frontier) checked.resolve()
+                          },
+                        },
+                        ctx,
+                      )
+                    },
+                  },
+                },
+              }
+            }
+            return registration
+          }),
+        }),
+      )
+    }
+    const route: FauxResponseFactory = async (transcript) => {
+      prepared.host.faux!.appendResponses([route])
+      const last = transcript.messages.findLast((message) => message.role !== 'system')!
+      if (last.role === 'user' && textOf(last.content) === 'Start child')
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('subagent', {
+              action: 'start',
+              agent: 'recovery-child',
+              task: 'Child initial',
+              isolate: 'none',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      return fauxAssistantMessage('Answered.')
+    }
+    return route
+  }
+  const { server, home } = await fixture(undefined, setup)
+  await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(home, '.ultimate/agents/recovery-child.md'),
+    '---\nname: recovery-child\ndescription: Answer\nmodel: faux/faux-1\nisolate: none\n---\nAnswer.\n',
+  )
+  const starter = await secondConversation(server)
+  const parent = await branchFrom(server, { from: 1, prompt: 'Land me' })
+  const branch = await settled(server, parent)
+  try {
+    await (await branch.submit({ type: 'input', content: 'Start child' }, context)).wait(context)
+    await branch.waitForIdle(context)
+    const child = Object.values(
+      (await server.harness.snapshot(Subagents, parent, context))!.agents,
+    )[0].conversationId
+    const input = await (await server.harness.conversation(child, context))!.submit(
+      { type: 'input', content: 'Recovered answer', requestId: 'watchdog-retry:landing' },
+      context,
+    )
+    const answer = await input.wait(context)
+    if (answer.status !== 'done' || answer.type !== 'input')
+      throw new Error('Recovery input did not answer')
+    await reporterHeld.promise
+    const recovery = (await server.harness.snapshot(Subagents, parent, context))!.actions[
+      `subagent-answer:${answer.answer}`
+    ]
+    expect(recovery).toMatchObject({ answer: answer.answer, status: 'done' })
+    expect(
+      await server.harness.commit(
+        (tx) => tx.submissionByRequest(child, `subagent:${recovery.reporter}`),
+        context,
+      ),
+    ).toBeUndefined()
+    await server.harness.commit(async (tx) => {
+      ;(await tx.doc(Started, parent)).by = starter.id
+    }, context)
+    const task = await reportLanding(server, parent)
+    await checked.promise
+    const pending = (await server.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+      .pendingReports.callback
+    expect(pending?.decision).toBeUndefined()
+    expect((await landerTask(server, task))!.state).toMatchObject({
+      status: 'running',
+      checkpoint: { phase: 'report' },
+    })
+    expect(pending.frontier!.deliveries).toEqual([])
+    expect(pending.frontier!.reports).toContainEqual({ parent, answer: answer.answer })
+    expect(await concluded(server)).not.toContain(parent)
+    reporterGate.resolve()
+    await until(() => landerEnded(server, task))
+    expect((await landerTask(server, task))!.state).toMatchObject({
+      status: 'terminal',
+      outcome: { status: 'completed' },
+    })
+    expect(
+      await server.harness.commit(
+        (tx) => tx.submissionByRequest(parent, `subagent-answer:${answer.answer}`),
+        context,
+      ),
+    ).toMatchObject({ type: 'input', status: 'done' })
+    expect(await concluded(server)).toContain(parent)
+    await starter.waitForIdle(context)
+    const wakes = (await starter.context(context)).entries.filter((entry) => entry.input)
+    expect(wakes.map((entry) => entry.kind)).toEqual(['workspaces.lander-report'])
+  } finally {
+    reporterGate.resolve()
+  }
+})
 
 it.concurrent('keeps a branch open when its run active at landing is stopped before the decision', async () => {
   const ordinaryGate = Promise.withResolvers<void>()

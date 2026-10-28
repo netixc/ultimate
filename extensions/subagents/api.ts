@@ -94,6 +94,8 @@ export type ReplySettlement = {
 }
 
 export type SubagentsService = {
+  /** Read the exact parent report for an already admitted child answer; does not write tables. */
+  settleReport(tx: Tx, parent: ConversationId, answer: EntryId): Promise<ReplySettlement>
   /** Read a child callback's exact parent report receipt, never idle alone; does not write tables. */
   settleReply(tx: Tx, submission: SubmissionRecord): Promise<ReplySettlement>
   /** Admit the existing answer-recovery Reporter inside tx; call last, after all table reads. */

@@ -180,7 +180,8 @@ lander's sidebar row shows the feature it lands or landed last.
    - A landing is the end of the branch's work. The report is a note in the submitter, which starts no run. The
      landing freezes the already admitted internal reply deliveries in the branch's owned tree. Their exact callback,
      explicit-answer and recovered parent-report receipts must settle before the final decision; an idle child alone
-     is not proof. Only those causal inputs belong to this finite boundary. Input receipts for runs already active at
+     is not proof. An already admitted recovery Reporter is pinned by its exact parent and answer even without a
+     board delivery. Only those causal inputs belong to this finite boundary. Input receipts for runs already active at
      capture must also be answered: Stop or failure is not completion. These ordinary runs are never awaited.
      New input outside the boundary, unanswered or failed callbacks, open outgoing questions, another queued tip from
      the same branch and other work keep the branch open.

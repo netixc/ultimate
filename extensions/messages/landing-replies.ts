@@ -50,7 +50,7 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
     async capture(tx, id) {
       const conversations = [id]
       let after = 0
-      const reports: { conversationId: ConversationId; requestId: string }[] = []
+      const reports: LandingFrontier['reports'] = []
       const runs: LandingFrontier['runs'] = []
       for (const member of conversations) {
         const run = (await tx.doc(LiveDoc, member)).run
@@ -62,6 +62,16 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
         const children = await tx.doc(Subagents, member)
         for (const child of Object.values(children.agents)) conversations.push(child.conversationId)
         for (const action of Object.values(children.actions)) {
+          if (action.answer !== undefined) {
+            // Recovery Reporters start at report, with no subagent:<reporter> child input.
+            // Pin their already admitted answer and exact parent report instead.
+            if (
+              (await host.need(SubagentsApi).settleReport(tx, member, action.answer)).state ===
+              'pending'
+            )
+              reports.push({ parent: member, answer: action.answer })
+            continue
+          }
           const requestId = `subagent:${action.reporter}`
           const input = await tx.submissionByRequest(action.conversationId, requestId)
           // The child already answered at landing, but its parent report may still be queued.
@@ -106,6 +116,14 @@ export function landingReplies(host: ExtensionHost): LandingRepliesService {
     async settle(tx, frontier) {
       const entries = []
       for (const report of frontier.reports) {
+        if ('answer' in report) {
+          const settled = await host
+            .need(SubagentsApi)
+            .settleReport(tx, report.parent, report.answer)
+          entries.push(...settled.entries)
+          if (settled.state !== 'settled') return settled.state
+          continue
+        }
         const input = await tx.submissionByRequest(report.conversationId, report.requestId)
         if (!input) return 'unanswered'
         const settled = await host.need(SubagentsApi).settleReply(tx, input)

@@ -52,7 +52,7 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Pin } from '../models/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
-import type { SubagentReply, SubagentsService } from './api.ts'
+import type { ReplySettlement, SubagentReply, SubagentsService } from './api.ts'
 import {
   DefinitionAction,
   DefinitionsAction,
@@ -629,8 +629,35 @@ export default function subagents(
     state.actions[requestId] = action
     return action
   }
+  async function settleReport(
+    tx: Tx,
+    parent: ConversationId,
+    answer: EntryId,
+  ): Promise<ReplySettlement> {
+    const entries: EntryId[] = []
+    const report = await tx.submissionByRequest(parent, answerRequest(answer))
+    if (report && 'entry' in report && report.entry) entries.push(report.entry)
+    if (
+      report?.status === 'done' ||
+      (report?.status === 'unanswered' && report.reason === 'subagent-tool-delivered')
+    )
+      return { state: 'settled', entries }
+    if (report?.status === 'unanswered') return { state: 'unanswered', entries }
+    if (report) return { state: 'pending', entries }
+    const reporters = Object.values((await tx.doc(Subagents, parent)).actions).filter(
+      (action) => action.answer === answer,
+    )
+    // Coalesced inputs may share an answer: a deduplicated Reporter completes without a report,
+    // while the one that claimed the answer still delivers it. Only all-ended reporters prove failure.
+    for (const action of reporters) {
+      const reporter = await tx.task(action.reporter)
+      if (reporter && reporter.state.status !== 'terminal') return { state: 'pending', entries }
+    }
+    return { state: reporters.length ? 'unanswered' : 'pending', entries }
+  }
   host.implement(SubagentsApi, {
     start,
+    settleReport,
     recoverReply: (tx, submission) => recoverIn(tx, submission),
     async settleReply(tx, submission) {
       const entries = 'entry' in submission && submission.entry ? [submission.entry] : []
@@ -641,28 +668,8 @@ export default function subagents(
       const parent = child?.owner?.conversationId
       if (parent === undefined || !(await tx.doc(Subagents, parent)).agents[String(child!.id)])
         return { state: 'settled', entries }
-      const report = await tx.submissionByRequest(parent, answerRequest(submission.answer))
-      if (report && 'entry' in report && report.entry) entries.push(report.entry)
-      if (
-        report?.status === 'done' ||
-        (report?.status === 'unanswered' && report.reason === 'subagent-tool-delivered')
-      )
-        return { state: 'settled', entries }
-      if (report?.status === 'unanswered') return { state: 'unanswered', entries }
-      if (report) return { state: 'pending', entries }
-      const reporters = Object.values((await tx.doc(Subagents, parent)).actions).filter(
-        (action) => action.answer === submission.answer,
-      )
-      // Coalesced inputs may share an answer: a deduplicated Reporter completes without a report,
-      // while the one that claimed the answer still delivers it. Only all-ended reporters prove failure.
-      for (const action of reporters) {
-        const reporter = await tx.task(action.reporter)
-        if (reporter && reporter.state.status !== 'terminal') return { state: 'pending', entries }
-      }
-      return {
-        state: reporters.length ? 'unanswered' : 'pending',
-        entries,
-      }
+      const report = await settleReport(tx, parent, submission.answer)
+      return { state: report.state, entries: [...entries, ...report.entries] }
     },
     async replies(tx, parent, children) {
       const state = await tx.doc(Subagents, parent)
