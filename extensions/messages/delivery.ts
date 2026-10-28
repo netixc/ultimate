@@ -327,7 +327,7 @@ export function delivery(host: ExtensionHost) {
               ...(m.remote ? { remote: m.remote } : {}),
             },
           }
-          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}\nYour next final answer stays here; it is not sent back automatically. Use message to ${task.input.toLabel} if it needs a decision or follow-up.`
+          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}\nThis reply needs no acknowledgement. Normal answer/report routing still applies; follow up only if a decision or further work is needed.`
           const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
           const requestId = `board-reply:${m.id}`
           // A reply that triage, before its removal, wrote as context stands; a short input after it wakes the sender.

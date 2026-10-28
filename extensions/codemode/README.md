@@ -6,7 +6,7 @@ Run an async JavaScript function body in a fresh QuickJS/WASM sandbox. Only inje
 
 `text(value)`, console methods, `image(data)`, and the return value produce model-visible output. Nested-call completion lines stream to `pi.live`; final details contain `{ calls: [{ name, args, status, ms, conversationId?, background? }], value?, error?, subagentAnswers? }`. Script failures preserve output and QuickJS's `codemode.js:<line>` stack. Interrupted scripts are not replayed: Durable returns an interrupted result with the committed partial log. Ordinary nested side effects are never rolled back.
 
-The first line may be `// @options: {"timeout_ms":30000,"max_output_tokens":2000}`. Default timeout is 60 seconds, text output budget is 10,000 estimated tokens, and VM heap limit is 256 MiB. Conversation abort and sandbox deadlines cancel nested work through its context.
+The first line may be `// @options: {"timeout_ms":30000,"max_output_tokens":2000}`. Default timeout is 60 seconds, text output budget is 10,000 estimated tokens, and VM heap limit is 256 MiB. A nested bash `timeout` does not extend codemode's enclosing `timeout_ms`. Prefer direct bash for one long command; when composing calls, budget both timeouts deliberately. Conversation abort and sandbox deadlines cancel nested work through its context.
 
 ## Yielding to steering
 

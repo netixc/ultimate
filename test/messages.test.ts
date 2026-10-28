@@ -332,7 +332,7 @@ it('wakes an idle recipient and returns one typed reply; one-way messages return
     `Message from #1 (@ultimate):\nHello\nAnswer here; your answer is sent to #1 (@ultimate) automatically. Do not use message to reply.`,
   )
   expect(f.observed).toContain(
-    `Reply from #${f.recipient.id} to your message ${request.id}:\n${reply.text}\nYour next final answer stays here; it is not sent back automatically. Use message to #${f.recipient.id} if it needs a decision or follow-up.`,
+    `Reply from #${f.recipient.id} to your message ${request.id}:\n${reply.text}\nThis reply needs no acknowledgement. Normal answer/report routing still applies; follow up only if a decision or further work is needed.`,
   )
   // Answering the reply stays local: it creates no further message or callback.
   expect((await f.log())!.messages).toHaveLength(2)
