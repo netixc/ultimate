@@ -87,9 +87,12 @@ export async function buildSeed(host: ExtensionHost, prepared: Prepared): Promis
       )
       .map((item) => {
         const { name, prompt, agent, model, thinking } = item
+        // A standing agent's @name means the same in the new chapter; a #id does not exist there.
+        const subscribers = item.subscribers.filter((s): s is string => typeof s === 'string')
         return {
           name,
           prompt,
+          ...(subscribers.length ? { subscribers } : {}),
           ...(item.schedule ? { schedule: item.schedule } : {}),
           ...(item.event
             ? {
@@ -180,7 +183,7 @@ function chapterText(host: ExtensionHost, seed: Seed) {
 
 /** Why a carried trigger needs recreating instead of reusing a previous chapter's conversation ids. */
 export function recreationReason(automation: Seed['automations'][number]) {
-  const { event, condition, prompt } = automation
+  const { event, condition, prompt, subscribers } = automation
   const field =
     event?.name === 'conversations.compacted'
       ? 'conversation'
@@ -193,7 +196,7 @@ export function recreationReason(automation: Seed['automations'][number]) {
     (typeof target === 'number' && target !== ROOT_CONVERSATION_ID)
   )
     return 'conversation target'
-  if (!prompt) return 'subscribers'
+  if (!prompt && !subscribers?.length) return 'subscribers'
   return undefined
 }
 
@@ -270,15 +273,13 @@ export async function applySeed(host: ExtensionHost) {
     if (recreationReason(automation)) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
-    // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
-    // A rediscovered project script may share the name: only a carried trigger counts as the lost create.
-    const current = (await host.invoke('automations', 'list', null, signal)) as Automation[]
-    if (
-      !current.some(
-        (item) => (item.schedule || item.event || item.condition) && item.name === automation.name,
-      )
+    // Names are unique in a seed: a create whose receipt was lost gets its automation back from the key.
+    await host.invoke(
+      'automations',
+      'create',
+      { ...automation, key: `seed:${host.chapter.name}:${automation.name}` },
+      signal,
     )
-      await host.invoke('automations', 'create', automation, signal)
     await harness.commit(async (tx) => {
       const saved = await tx.doc(SeedState, ROOT_CONVERSATION_ID)
       if (!saved.automations.includes(automation.name)) saved.automations.push(automation.name)
