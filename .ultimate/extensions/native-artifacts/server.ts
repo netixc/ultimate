@@ -3,8 +3,8 @@ import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../../server/actions.ts'
 import type { ExtensionHost } from '../../../server/extensions.ts'
-import { ArtifactsApi } from '../artifacts/api.ts'
-import type { FeedbackInput } from '../artifacts/api.ts'
+import { ArtifactsApi, FeedbackTooLargeError } from '../artifacts/api.ts'
+import type { FeedbackInput, LayoutPassInput } from '../artifacts/api.ts'
 import { buildDocument } from './sandbox.ts'
 
 export default function nativeArtifacts(host: ExtensionHost) {
@@ -61,9 +61,16 @@ export const actions = {
   async feedback(args: JsonValue, ctx: ActionContext) {
     // The shared service validates every field, including limits and idempotency conflicts.
     object(args)
-    return ctx.host
-      .need(ArtifactsApi)
-      .feedback(args as unknown as FeedbackInput, BACKGROUND_CONTEXT)
+    try {
+      return await ctx.host
+        .need(ArtifactsApi)
+        .feedback(args as unknown as FeedbackInput, BACKGROUND_CONTEXT)
+    } catch (error) {
+      // This rejection is proven to precede persistence; every uncertain failure still throws for exact retry.
+      if (error instanceof FeedbackTooLargeError)
+        return { rejected: 'too-large', message: error.message }
+      throw error
+    }
   },
   async feedbackList(args: JsonValue, ctx: ActionContext) {
     return ctx.host.need(ArtifactsApi).feedbackList(id(args, 'artifactId'), BACKGROUND_CONTEXT)
@@ -73,9 +80,29 @@ export const actions = {
       .need(ArtifactsApi)
       .feedbackRead(id(args, 'artifactId'), id(args, 'id'), BACKGROUND_CONTEXT)
   },
+  async layoutRead(args: JsonValue, ctx: ActionContext) {
+    return ctx.host.need(ArtifactsApi).layoutRead(id(args, 'artifactId'), BACKGROUND_CONTEXT)
+  },
+  async layoutPass(args: JsonValue, ctx: ActionContext) {
+    // Only the trusted browser bridge reports geometry; the shared service bounds and validates it.
+    object(args)
+    return ctx.host
+      .need(ArtifactsApi)
+      .layoutPass(args as unknown as LayoutPassInput, BACKGROUND_CONTEXT)
+  },
+  async layoutDismiss(args: JsonValue, ctx: ActionContext) {
+    return ctx.host.need(ArtifactsApi).layoutDismiss(
+      {
+        artifactId: id(args, 'artifactId'),
+        issueId: id(args, 'issueId'),
+        contentHash: id(args, 'contentHash'),
+      },
+      BACKGROUND_CONTEXT,
+    )
+  },
 }
 
-export const pollActions = ['list', 'read', 'feedbackList']
-// Only an explicit browser review may send feedback using the standing agent's transport identity.
-export const userActions = ['feedback']
-export const sealedActions = ['feedback', 'feedbackRead']
+export const pollActions = ['list', 'read', 'feedbackList', 'layoutRead']
+// Only the human review boundary may send feedback or record and dismiss measured issues.
+export const userActions = ['feedback', 'layoutPass', 'layoutDismiss']
+export const sealedActions = ['feedback', 'feedbackRead', 'layoutPass', 'layoutDismiss']

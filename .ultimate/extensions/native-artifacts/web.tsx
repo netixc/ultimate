@@ -1,28 +1,65 @@
-import { FileCodeIcon, HistoryIcon, InfoIcon, MessageSquareIcon, RefreshCwIcon } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import {
+  FileCodeIcon,
+  InfoIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
+  RefreshCwIcon,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Switch } from '@/components/ui/switch'
 import {
   Card,
+  ComposerRedirect,
+  Conversation,
+  ConversationScope,
   StatusLine,
+  api,
+  cn,
   defineWebExtension,
+  errorMessage,
   useAction,
   useConversations,
   useExtensionUiState,
   useUltimate,
+  useViewport,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import type { Artifact, ArtifactAnchor } from '../artifacts/types.ts'
-import { FeedbackComposer, FeedbackHistory, NoteEditor, conversationName } from './feedback.tsx'
-import type { NativeDocument, TargetStatus } from './types.ts'
-import { List, Read, anyDrafts, hasDraft, useReviewDraft } from './ui.tsx'
+import type { Artifact, ArtifactAnchor, LayoutState } from '../artifacts/types.ts'
+import { ArtifactComposer, FeedbackHistory, conversationName } from './feedback.tsx'
+import { Issues } from './issues.tsx'
+import { NoteCard } from './note-card.tsx'
+import type {
+  LayoutDiagnostics,
+  NativeDocument,
+  RevealTarget,
+  TargetRect,
+  TargetStatus,
+} from './types.ts'
+import {
+  LayoutDismiss,
+  LayoutPass,
+  LayoutRead,
+  List,
+  Read,
+  ReviewComposerContext,
+  anyDrafts,
+  hasDraft,
+  useReviewDraft,
+} from './ui.tsx'
 import { ArtifactFrame } from './viewer.tsx'
 
-// Keep both revisions across surface switches: notes refer to the displayed one, polls use the latest fetched one.
 const displayed = new Map<string, NativeDocument>()
 const fetched = new Map<string, NativeDocument>()
 const short = (hash: string) => hash.slice(0, 8)
+const safeComposerTarget = {
+  placeholder: 'Use Send to Agent in the review composer',
+  send: async () => {
+    throw new Error('Use Send to Agent in the review composer. Nothing was sent.')
+  },
+}
 
 function PublishedArtifact({ call, core }: { call: ToolCallView; core: ReactNode }) {
   const [, select] = useExtensionUiState<string | null>('selected', null)
@@ -128,7 +165,7 @@ function Review({ artifact }: { artifact: Artifact }) {
   const { refetch } = result
   useEffect(() => {
     const timer = window.setInterval(() => {
-      // useAction reports errors in state and resolves undefined, including aborted polls.
+      // useAction reports failures in state and resolves undefined, including aborted polls.
       // oxlint-disable-next-line typescript/no-floating-promises
       if (!window.document.hidden) void refetch()
     }, 2000)
@@ -178,18 +215,39 @@ function LoadedReview({
 }) {
   const artifact = document.artifact
   const [draft, update] = useReviewDraft(artifact)
-  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const viewport = useViewport()
+  const phone = viewport !== 'desktop'
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024)
+  const [annotate, setAnnotate] = useState(true)
+  const [issuesOpen, setIssuesOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [noteOpen, setNoteOpen] = useState(false)
   const [interacting, setInteracting] = useState(false)
   const [statuses, setStatuses] = useState<TargetStatus[]>([])
+  const [rect, setRect] = useState<TargetRect | null>(null)
+  const [reveal, setReveal] = useState<RevealTarget>()
+  const [focusNote, setFocusNote] = useState(0)
   const [frameError, setFrameError] = useState<string>()
+  const frame = useRef<HTMLElement>(null)
+  const layout = useAction(LayoutRead, { artifactId: artifact.id }, { onError: () => {} })
+  const [layoutState, setLayoutState] = useState<LayoutState>()
+  const [checking, setChecking] = useState(true)
+  const [layoutError, setLayoutError] = useState<string>()
+  const lastPass = useRef<LayoutDiagnostics | undefined>(undefined)
+  useEffect(() => {
+    if (layout.data) setLayoutState(layout.data)
+  }, [layout.data])
+  useEffect(() => {
+    setChecking(true)
+    lastPass.current = undefined
+  }, [document.channel])
   const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
+  const recipient = Number(draft.recipient)
+  const validRecipient = Number.isSafeInteger(recipient) && recipient > 0
+  const conversationId = validRecipient ? recipient : artifact.recipientConversation
   const pending = hasDraft(draft)
-  const modalOpen = noteOpen || feedbackOpen || historyOpen || detailsOpen
-  const blocked = pending || modalOpen || interacting
+  const blocked = pending || historyOpen || detailsOpen || issuesOpen || interacting
   const updateReady = !!latest && latest.artifact.contentHash !== artifact.contentHash
   const anchors = useMemo(
     () => [
@@ -210,127 +268,231 @@ function LoadedReview({
     onDocument(latest)
   }
   useEffect(() => {
-    // The default picker stays active; only an actual gesture or unfinished feedback defers a newer revision.
     if (updateReady && !blocked) apply()
   })
-  const target = (anchor: ArtifactAnchor) => {
-    update((current) => (current.anchor ? current : { ...current, anchor, editor: '' }))
-    setFrameError(undefined)
-    setNoteOpen(true)
+  const target = (anchor: ArtifactAnchor, targetRect: TargetRect) => {
+    let accepted = false
+    update((current) => {
+      if (current.editorId) return current
+      accepted = true
+      return { ...current, anchor, editorId: crypto.randomUUID(), editor: '' }
+    })
+    if (accepted) {
+      setRect(targetRect)
+      setFrameError(undefined)
+    }
+  }
+  const diagnostics = async (pass: LayoutDiagnostics) => {
+    lastPass.current = pass
+    setChecking(true)
+    try {
+      const state = await api.action(LayoutPass, {
+        ...pass,
+        artifactId: artifact.id,
+        contentHash: artifact.contentHash,
+      })
+      setLayoutState(state)
+      setLayoutError(undefined)
+    } catch (failure) {
+      setLayoutError(`Couldn’t save layout check: ${errorMessage(failure)}`)
+    } finally {
+      setChecking(false)
+    }
+  }
+  const dismiss = async (issueId: string) => {
+    try {
+      const state = await api.action(LayoutDismiss, {
+        artifactId: artifact.id,
+        issueId,
+        contentHash: artifact.contentHash,
+      })
+      setLayoutState(state)
+      setLayoutError(undefined)
+      update((current) => ({
+        ...current,
+        selectedIssues: current.selectedIssues?.filter((id) => id !== issueId),
+      }))
+    } catch (failure) {
+      setLayoutError(`Couldn’t dismiss issue: ${errorMessage(failure)}`)
+    }
   }
   const sourceError = latest ? latest.sourceError : document.sourceError
-  const count = draft.notes.length + (draft.anchor ? 1 : 0)
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-artifact-review={artifact.id}>
-      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/70 px-2">
-        <FileCodeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <h1 className="min-w-0 flex-1 truncate text-[12px]" title={artifact.title}>
-          {artifact.title}
-        </h1>
-        <Button onClick={() => setFeedbackOpen(true)} size="sm" variant="ghost">
-          <MessageSquareIcon />
-          Feedback{count ? ` · ${count}` : pending ? ' · Draft' : ''}
-        </Button>
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/70 px-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="hidden truncate text-[12px] sm:block" title={artifact.title}>
+            {artifact.title}
+          </h1>
+        </div>
+        <Issues
+          state={layoutState}
+          loading={checking || layout.loading}
+          error={layoutError ?? (!layoutState ? layout.error?.message : undefined)}
+          open={issuesOpen}
+          setOpen={setIssuesOpen}
+          draft={draft}
+          update={update}
+          retry={() => (lastPass.current ? diagnostics(lastPass.current) : layout.refetch())}
+          reveal={(selector) =>
+            setReveal((current) => ({ selector, request: (current?.request ?? 0) + 1 }))
+          }
+          dismiss={dismiss}
+        />
+        <label className="flex items-center gap-1.5 text-[12px]">
+          <Switch aria-label="Annotate" checked={annotate} onCheckedChange={setAnnotate} />
+          <span>Annotate</span>
+        </label>
         <Button
-          aria-label="Feedback history"
-          title="Feedback history"
-          onClick={() => setHistoryOpen(true)}
           size="icon-sm"
           variant="ghost"
+          aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+          title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+          onClick={() => setSidebarOpen(!sidebarOpen)}
         >
-          <HistoryIcon />
+          {sidebarOpen ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
         </Button>
         <Button
+          size="icon-sm"
+          variant="ghost"
           aria-label="Artifact details"
           title="Artifact details"
           onClick={() => setDetailsOpen(true)}
-          size="icon-sm"
-          variant="ghost"
         >
           <InfoIcon />
         </Button>
       </header>
-      <div className="relative min-h-0 flex-1" aria-label="Artifact preview">
-        <ArtifactFrame
-          document={document}
-          mode={modalOpen || draft.anchor ? 'view' : 'annotate'}
-          anchors={anchors}
-          onTarget={target}
-          onStatuses={setStatuses}
-          onReady={() => setFrameError(undefined)}
-          onError={setFrameError}
-          onInteracting={setInteracting}
-        />
-        {(sourceError || readError || frameError || updateReady) && (
-          <div
-            className="absolute bottom-3 left-3 right-3 mx-auto w-fit max-w-[calc(100%-1.5rem)] rounded-md border border-border/70 bg-background px-3 py-2 text-[12px] shadow-sm"
-            role="status"
-          >
-            {frameError ??
-              (sourceError
-                ? `Showing retained snapshot: ${sourceError}`
-                : readError
-                  ? `Refresh failed: ${readError}`
-                  : 'Update ready · finish feedback to refresh.')}
-            {readError && (
-              <button className="ml-2 cursor-pointer underline" onClick={retry} type="button">
-                Retry
-              </button>
-            )}
-            {updateReady && !blocked && (
-              <Button onClick={apply} size="xs" variant="ghost">
-                <RefreshCwIcon />
-                Apply update
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-      <Dialog open={noteOpen && !!draft.anchor} onOpenChange={setNoteOpen}>
-        <DialogContent
-          className="max-h-[85dvh] overflow-y-auto p-4 sm:max-w-sm"
-          aria-describedby="native-artifacts-note-description"
+      <div className="relative flex min-h-0 flex-1">
+        <section
+          ref={frame}
+          className="relative min-h-0 min-w-0 flex-1"
+          aria-label="Artifact preview"
+          data-artifact-frame
         >
-          <DialogTitle className="pr-6 text-[14px]">Add note</DialogTitle>
-          <DialogDescription className="sr-only" id="native-artifacts-note-description">
-            {draft.anchor?.kind === 'text' ? 'Selected text' : 'Selected element'}. Closing keeps
-            this draft in your feedback.
-          </DialogDescription>
-          <NoteEditor draft={draft} update={update} onAdded={() => setNoteOpen(false)} />
-        </DialogContent>
-      </Dialog>
-      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
-        <DialogContent
-          className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
-          aria-describedby="native-artifacts-feedback-description"
-        >
-          <div className="border-b border-border/70 px-3 py-4">
-            <DialogTitle className="pr-6 text-[14px]">Feedback</DialogTitle>
-            <DialogDescription className="sr-only" id="native-artifacts-feedback-description">
-              Review notes, add general feedback or reference images, then send to the maker.
-            </DialogDescription>
-          </div>
-          <FeedbackComposer
-            artifact={artifact}
-            draft={draft}
-            update={update}
-            statuses={statuses}
-            onContinueNote={() => {
-              setFeedbackOpen(false)
-              setNoteOpen(true)
+          <ArtifactFrame
+            document={document}
+            mode={
+              annotate && !draft.editorId && !historyOpen && !detailsOpen && !issuesOpen
+                ? 'annotate'
+                : 'view'
+            }
+            anchors={anchors}
+            selected={draft.anchor}
+            reveal={reveal}
+            onTarget={target}
+            onRect={(next) => {
+              if (draft.editorId) setRect(next)
             }}
+            onStatuses={setStatuses}
+            onReady={() => setFrameError(undefined)}
+            onError={setFrameError}
+            onInteracting={setInteracting}
+            onDiagnostics={diagnostics}
           />
-        </DialogContent>
-      </Dialog>
+          {(sourceError || readError || frameError || updateReady) && (
+            <div
+              className="absolute right-3 bottom-3 left-3 mx-auto w-fit max-w-[calc(100%-1.5rem)] rounded-md border border-border/70 bg-background px-3 py-2 text-[12px] shadow-sm"
+              role="status"
+            >
+              {frameError ??
+                (sourceError
+                  ? `Showing retained snapshot: ${sourceError}`
+                  : readError
+                    ? `Refresh failed: ${readError}`
+                    : 'Update ready · finish feedback to refresh.')}
+              {readError && (
+                <button className="ml-2 cursor-pointer underline" onClick={retry} type="button">
+                  Retry
+                </button>
+              )}
+              {updateReady && !blocked && (
+                <Button onClick={apply} size="xs" variant="ghost">
+                  <RefreshCwIcon />
+                  Apply update
+                </Button>
+              )}
+            </div>
+          )}
+        </section>
+        <aside
+          aria-label="Conversation"
+          data-artifact-conversation
+          className={cn(
+            'flex min-h-0 shrink-0 flex-col wrap-anywhere border-border/70 bg-background',
+            phone
+              ? 'absolute inset-x-0 bottom-0 z-30 h-3/4 rounded-t-lg border-t shadow-xl'
+              : 'w-[24rem] border-l',
+            !sidebarOpen && 'hidden',
+          )}
+        >
+          <div className="shrink-0 space-y-2 border-b border-border/70 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-[13px] font-medium">Conversation</h2>
+              <button
+                type="button"
+                className="cursor-pointer text-[11px] text-muted-foreground hover:underline"
+                onClick={() => setHistoryOpen(true)}
+              >
+                Receipts
+              </button>
+            </div>
+            <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              Send to conversation
+              <input
+                aria-label="Feedback destination"
+                inputMode="numeric"
+                className="w-20 rounded border border-border/70 bg-background px-2 py-1 text-base text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/40 sm:text-[12px]"
+                value={draft.recipient}
+                disabled={!!draft.request}
+                onChange={(event) =>
+                  update((current) => ({ ...current, recipient: event.target.value }))
+                }
+              />
+            </label>
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              Full conversation #{conversationId}; it may include other work.{' '}
+              {!validRecipient && 'Enter a valid destination before sending.'}
+            </p>
+          </div>
+          <ReviewComposerContext.Provider
+            value={{
+              artifact,
+              draft,
+              update,
+              statuses,
+              onContinueNote: () => {
+                setFocusNote((current) => current + 1)
+                if (phone) setSidebarOpen(false)
+              },
+            }}
+          >
+            <ConversationScope id={conversationId}>
+              <ComposerRedirect to={safeComposerTarget}>
+                <Conversation variant="dock" />
+              </ComposerRedirect>
+            </ConversationScope>
+          </ReviewComposerContext.Provider>
+        </aside>
+      </div>
+      {draft.editorId && (
+        <NoteCard
+          draft={draft}
+          update={update}
+          rect={rect}
+          frame={frame.current}
+          focus={focusNote}
+          onClose={() => setRect(null)}
+        />
+      )}
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent
           className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
           aria-describedby="native-artifacts-history-description"
         >
           <div className="border-b border-border/70 px-3 py-4">
-            <DialogTitle className="pr-6 text-[14px]">Feedback history</DialogTitle>
+            <DialogTitle className="pr-6 text-[14px]">Feedback receipts</DialogTitle>
             <DialogDescription className="sr-only" id="native-artifacts-history-description">
-              Saved feedback and delivery receipts for this artifact.
+              Saved feedback and actual delivery routes, not read or repair confirmations.
             </DialogDescription>
           </div>
           <div className="min-h-0 overflow-y-auto">
@@ -345,8 +507,8 @@ function LoadedReview({
         >
           <DialogTitle className="pr-6 text-[14px]">Artifact details</DialogTitle>
           <DialogDescription className="text-[12px]" id="native-artifacts-details-description">
-            Click an element or drag over text to add a note. On phones, use native text-selection
-            handles.
+            Turn Annotate on, then click an element or drag over text. Queue notes first; only Send
+            to Agent sends the batch.
           </DialogDescription>
           <dl className="space-y-3 text-[12px]">
             <div>
@@ -373,23 +535,11 @@ function LoadedReview({
               <dd className="break-words font-mono text-[11px]">{artifact.source.path}</dd>
             </div>
           </dl>
-          <label className="space-y-1.5 text-[12px] text-muted-foreground">
-            Feedback to conversation
-            <input
-              aria-label="Feedback destination"
-              className="mt-1 w-full rounded-md border border-border/70 bg-background px-2 py-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              inputMode="numeric"
-              value={draft.recipient}
-              disabled={!!draft.request}
-              onChange={(event) =>
-                update((current) => ({ ...current, recipient: event.target.value }))
-              }
-            />
-          </label>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Static local HTML. Authored scripts and network access are blocked. Concluded or
-            unavailable destinations route through @ultimate. Drafts stay in this tab, not on disk;
-            send before reloading.
+            Static local HTML: authored scripts and network are blocked. Queued notes and selected
+            fixes stay only in this tab until sent. Concluded or unavailable destinations route
+            through @ultimate; the actual route appears on the receipt. Native conversation replies
+            may discuss unrelated work.
           </p>
         </DialogContent>
       </Dialog>
@@ -403,7 +553,7 @@ function Artifacts() {
   const { refetch } = artifacts
   useEffect(() => {
     const timer = window.setInterval(() => {
-      // useAction reports errors in state and resolves undefined, including aborted polls.
+      // useAction reports failures in state and resolves undefined, including aborted polls.
       // oxlint-disable-next-line typescript/no-floating-promises
       if (!document.hidden) void refetch()
     }, 2000)
@@ -443,7 +593,7 @@ function Artifacts() {
             </h1>
             <p className="text-[13px] leading-relaxed text-muted-foreground">
               {artifacts.error?.message ??
-                'Ask the maker to publish a local HTML file. Click an element or drag over text to add feedback.'}
+                'Ask the maker to publish local HTML, then annotate and queue feedback for its maker.'}
             </p>
             {artifacts.error && (
               <Button onClick={() => artifacts.refetch()} size="sm" variant="outline">
@@ -471,12 +621,13 @@ function DraftGuard() {
 
 export default defineWebExtension({
   slots: { overlay: [DraftGuard] },
+  composer: ArtifactComposer,
   surfaces: [
     {
       id: 'native-artifacts',
       title: 'Artifacts',
       icon: FileCodeIcon,
-      description: 'Review local HTML and send precise feedback to its maker',
+      description: 'Annotate, queue and explicitly send feedback to the maker',
       component: Artifacts,
     },
   ],

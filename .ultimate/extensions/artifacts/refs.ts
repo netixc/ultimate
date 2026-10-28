@@ -7,6 +7,9 @@ import type {
   FeedbackInput,
   FeedbackSummary,
   PublishArtifact,
+  LayoutPassInput,
+  LayoutDismissInput,
+  LayoutState,
 } from './types.ts'
 
 /** PublishArtifact → Artifact. Owner is always the calling conversation, never an input field. */
@@ -26,4 +29,13 @@ export const FeedbackList = actionRef<{ artifactId: string }, FeedbackSummary[]>
 export const FeedbackRead = actionRef<{ artifactId: string; id: string }, FeedbackBundle>(
   'artifacts',
   'feedbackRead',
+)
+/** { artifactId } → bounded LayoutState, read-only and pollable. */
+export const LayoutRead = actionRef<{ artifactId: string }, LayoutState>('artifacts', 'layoutRead')
+/** LayoutPassInput → LayoutState. User-only real frame observations; stale hashes cannot change triage. */
+export const LayoutPass = actionRef<LayoutPassInput, LayoutState>('artifacts', 'layoutPass')
+/** LayoutDismissInput → LayoutState. User-only dismissal scoped to the current content hash. */
+export const LayoutDismiss = actionRef<LayoutDismissInput, LayoutState>(
+  'artifacts',
+  'layoutDismiss',
 )

@@ -8,6 +8,9 @@ import type {
   FeedbackInput,
   FeedbackSummary,
   PublishArtifact,
+  LayoutPassInput,
+  LayoutDismissInput,
+  LayoutState,
 } from './types.ts'
 
 export type ArtifactsService = {
@@ -23,14 +26,30 @@ export type ArtifactsService = {
   feedbackList(artifactId: string, ctx: Context): Promise<FeedbackSummary[]>
   /** Read one saved feedback bundle, including retained image bytes, for this artifact only. */
   feedbackRead(artifactId: string, id: string, ctx: Context): Promise<FeedbackBundle>
+  /** Read bounded retained observations; never scans or changes triage. */
+  layoutRead(artifactId: string, ctx: Context): Promise<LayoutState>
+  /** Save a real frame measurement for the current hash; trusted browser adapters only. */
+  layoutPass(input: LayoutPassInput, ctx: Context): Promise<LayoutState>
+  /** Dismiss a retained observation for this current revision only; trusted browser adapters only. */
+  layoutDismiss(input: LayoutDismissInput, ctx: Context): Promise<LayoutState>
 }
 /** Shared backend for local HTML artifact reviewers. */
 export const ArtifactsApi = defineApi<ArtifactsService>()('artifacts')
+/** Definitive pre-save size rejection; adapters may safely let the human edit the rejected batch. */
+export { FeedbackTooLargeError } from './types.ts'
 export type {
   Artifact,
   ArtifactSnapshot,
+  ArtifactNote,
+  ReferenceImage,
   FeedbackBundle,
   FeedbackInput,
   FeedbackSummary,
   PublishArtifact,
+  LayoutViewport,
+  LayoutFinding,
+  LayoutPassInput,
+  LayoutIssue,
+  LayoutState,
+  LayoutDismissInput,
 } from './types.ts'

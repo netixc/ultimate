@@ -1,5 +1,5 @@
 import { apis, idleNeed, temp } from './helpers.ts'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { AgentDoc, configure, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -17,9 +17,17 @@ import { Subagents, Standing, SubagentsApi } from '../extensions/subagents/api.t
 import { submitInput } from '../server/submit.ts'
 import { send } from '../extensions/messages/send.ts'
 import artifactExtension, { Registry, actions } from '../.ultimate/extensions/artifacts/server.ts'
-import { ArtifactsApi } from '../.ultimate/extensions/artifacts/api.ts'
-import { ArtifactStorage, digest } from '../.ultimate/extensions/artifacts/storage.ts'
-import type { FeedbackInput } from '../.ultimate/extensions/artifacts/types.ts'
+import { ArtifactsApi, FeedbackTooLargeError } from '../.ultimate/extensions/artifacts/api.ts'
+import {
+  ArtifactStorage,
+  digest,
+  feedbackInput,
+} from '../.ultimate/extensions/artifacts/storage.ts'
+import {
+  FEEDBACK_IMAGE_MAX_BYTES,
+  FEEDBACK_MAX_JSON_BYTES,
+} from '../.ultimate/extensions/artifacts/types.ts'
+import type { FeedbackInput, LayoutFinding } from '../.ultimate/extensions/artifacts/types.ts'
 
 const anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'artifacts-test.owner',
@@ -437,4 +445,390 @@ it('admits human feedback for a child publisher without impersonating a message 
     .opened()
     .harness.commit((tx) => tx.submissionByRequest(child, `artifacts:${bundle.id}`), context)
   expect(admitted?.id).toBe(bundle.submissionId)
+})
+
+it('retains real layout observations and only resolves them after a complete newer-hash pass at the exact measured viewport', async () => {
+  const f = await fixture()
+  const first = await f.service.publish({ title: 'Layout', path: 'page.html' }, f.owner, context)
+  const viewport = { width: 800, height: 601 }
+  const finding: LayoutFinding = {
+    rule: 'clipped-control',
+    selector: '#save',
+    axis: 'vertical',
+    overflowPx: 42,
+  }
+  expect(await f.service.layoutRead(first.id, context)).toEqual({ issues: [] })
+  const observed = await f.service.layoutPass(
+    {
+      artifactId: first.id,
+      contentHash: first.contentHash,
+      viewport,
+      complete: true,
+      findings: [finding],
+    },
+    context,
+  )
+  const [issue] = observed.issues
+  expect(issue).toMatchObject({
+    ...finding,
+    viewport,
+    contentHash: first.contentHash,
+    status: 'open',
+  })
+  const absentSameHash = await f.service.layoutPass(
+    {
+      artifactId: first.id,
+      contentHash: first.contentHash,
+      viewport,
+      complete: true,
+      findings: [],
+    },
+    context,
+  )
+  expect(absentSameHash.issues[0].status).toBe('open')
+  const dismissed = await f.service.layoutDismiss(
+    { artifactId: first.id, issueId: issue.id, contentHash: first.contentHash },
+    context,
+  )
+  expect(dismissed.issues[0]).toMatchObject({
+    status: 'dismissed',
+    dismissedFor: first.contentHash,
+  })
+  await writeFile(join(f.workspace, 'page.html'), '<h1>Revised layout</h1>')
+  const revised = await f.service.read(first.id, context)
+  const currentHash = revised.artifact.contentHash
+  const stale = await f.service.layoutRead(first.id, context)
+  expect(stale).toMatchObject({
+    stale: true,
+    issues: [{ status: 'open', contentHash: first.contentHash }],
+  })
+  // A user can dismiss an older observation for the current revision without falsifying its provenance.
+  expect(
+    (
+      await f.service.layoutDismiss(
+        { artifactId: first.id, issueId: issue.id, contentHash: currentHash },
+        context,
+      )
+    ).issues[0],
+  ).toMatchObject({
+    status: 'dismissed',
+    dismissedFor: currentHash,
+    contentHash: first.contentHash,
+  })
+  const pass = {
+    artifactId: first.id,
+    contentHash: currentHash,
+    viewport,
+    complete: true,
+    findings: [],
+  }
+  const incomplete = await f.service.layoutPass(
+    { ...pass, complete: false, error: 'Font measurement deadline' },
+    context,
+  )
+  expect(incomplete).toMatchObject({
+    pass: { complete: false, error: 'Font measurement deadline' },
+    issues: [{ status: 'dismissed' }],
+  })
+  const otherViewport = await f.service.layoutPass(
+    { ...pass, viewport: { ...viewport, height: 600 } },
+    context,
+  )
+  expect(otherViewport.issues[0].status).toBe('dismissed')
+  const rejected = await f.service.layoutPass({ ...pass, contentHash: first.contentHash }, context)
+  expect(rejected).toMatchObject({
+    stale: true,
+    pass: { complete: false, error: expect.stringContaining('Stale') },
+  })
+  expect((await f.service.layoutRead(first.id, context)).pass).toEqual(otherViewport.pass)
+  await expect(
+    f.service.layoutDismiss(
+      { artifactId: first.id, issueId: issue.id, contentHash: first.contentHash },
+      context,
+    ),
+  ).rejects.toThrow('stale')
+  const resolved = await f.service.layoutPass(pass, context)
+  expect(resolved.issues[0]).toMatchObject({
+    id: issue.id,
+    contentHash: first.contentHash,
+    lastSeenAt: issue.lastSeenAt,
+    status: 'resolved',
+  })
+  await f.reopen()
+  expect((await f.service.layoutRead(first.id, context)).issues[0].status).toBe('resolved')
+  const present = await f.service.layoutPass(
+    { ...pass, findings: [{ ...finding, overflowPx: 60 }] },
+    context,
+  )
+  expect(present.issues[0]).toMatchObject({
+    id: issue.id,
+    status: 'open',
+    contentHash: currentHash,
+    overflowPx: 60,
+  })
+  const differentlyMeasured = await f.service.layoutPass(
+    { ...pass, viewport: { width: 801, height: 601 }, findings: [finding] },
+    context,
+  )
+  expect(differentlyMeasured.issues).toHaveLength(2)
+  expect(differentlyMeasured.issues[1].id).not.toBe(issue.id)
+})
+
+it('keeps bounded layout state honest when observation capacity is exhausted', async () => {
+  const f = await fixture()
+  const artifact = await f.service.publish(
+    { title: 'Capacity', path: 'page.html' },
+    f.owner,
+    context,
+  )
+  const findings = (offset: number): LayoutFinding[] =>
+    Array.from({ length: 100 }, (_, index) => ({
+      rule: 'page-horizontal-overflow',
+      selector: `#wide-${offset + index}`,
+      axis: 'horizontal',
+      overflowPx: 12,
+    }))
+  const input = {
+    artifactId: artifact.id,
+    contentHash: artifact.contentHash,
+    viewport: { width: 390, height: 844 },
+    complete: true,
+    findings: findings(0),
+  }
+  await f.service.layoutPass(input, context)
+  await f.service.layoutPass({ ...input, findings: findings(100) }, context)
+  await writeFile(join(f.workspace, 'page.html'), '<h1>New revision with capacity reached</h1>')
+  const revised = await f.service.read(artifact.id, context)
+  const result = await f.service.layoutPass(
+    { ...input, contentHash: revised.artifact.contentHash, findings: findings(200) },
+    context,
+  )
+  expect(result.issues).toHaveLength(200)
+  expect(result.issues.every((issue) => issue.status === 'open')).toBe(true)
+  expect(result.pass).toMatchObject({
+    complete: false,
+    error: expect.stringContaining('100 findings not retained'),
+  })
+  expect((await f.service.layoutRead(artifact.id, context)).pass).toEqual(result.pass)
+})
+
+it('saves note-associated images and immutable server-observed issue context across reads and admission retries', async () => {
+  const f = await fixture()
+  const artifact = await f.service.publish(
+    { title: 'Associations', path: 'page.html' },
+    f.owner,
+    context,
+  )
+  const finding: LayoutFinding = {
+    rule: 'unreachable-control',
+    selector: '#submit',
+    axis: 'horizontal',
+    overflowPx: 55,
+  }
+  const viewport = { width: 390, height: 844 }
+  const [issue] = (
+    await f.service.layoutPass(
+      {
+        artifactId: artifact.id,
+        contentHash: artifact.contentHash,
+        viewport,
+        complete: true,
+        findings: [finding],
+      },
+      context,
+    )
+  ).issues
+  await writeFile(join(f.workspace, 'page.html'), '<h1>Repaired revision</h1>')
+  const revised = await f.service.read(artifact.id, context)
+  await f.service.layoutPass(
+    {
+      artifactId: artifact.id,
+      contentHash: revised.artifact.contentHash,
+      viewport,
+      complete: true,
+      findings: [],
+    },
+    context,
+  )
+  const input: FeedbackInput = {
+    artifactId: artifact.id,
+    requestId: 'associated',
+    contentHash: artifact.contentHash,
+    recipientConversation: f.owner,
+    notes: [
+      { id: 'picture-note', text: '' },
+      { id: 'layout-note', text: 'Check the measured target', layoutIssueIds: [issue.id] },
+    ],
+    images: [
+      {
+        name: 'note.png',
+        mime: 'image/png',
+        base64: Buffer.from('note-image').toString('base64'),
+        noteId: 'picture-note',
+      },
+      {
+        name: 'general.png',
+        mime: 'image/png',
+        base64: Buffer.from('general-image').toString('base64'),
+      },
+    ],
+  }
+  const original = f.host.submit.bind(f.host)
+  let makerText = ''
+  f.host.submit = async (...args) => {
+    makerText = args[1].text
+    await original(...args)
+    throw new Error('Lost acknowledgement')
+  }
+  const saved = await f.service.feedback(
+    { ...input, layoutIssues: [{ ...issue, overflowPx: 999 }] } as FeedbackInput,
+    context,
+  )
+  expect(saved.layoutIssues).toEqual([{ ...issue, status: 'resolved' }])
+  expect(saved.images).toEqual(input.images)
+  expect(makerText).toContain('for note picture-note')
+  expect(makerText).toContain('general reference')
+  expect(makerText).toContain(`Layout issue references: ${issue.id}`)
+  expect(makerText).toContain(JSON.stringify(saved.layoutIssues![0]))
+  const storage = new ArtifactStorage(f.host.home)
+  expect(
+    JSON.parse(
+      await readFile(join(storage.feedbackPath(artifact.id, saved.id), 'bundle.json'), 'utf8'),
+    ),
+  ).toMatchObject({ images: input.images, layoutIssues: saved.layoutIssues })
+  await f.service.layoutPass(
+    {
+      artifactId: artifact.id,
+      contentHash: revised.artifact.contentHash,
+      viewport,
+      complete: true,
+      findings: [{ ...finding, overflowPx: 80 }],
+    },
+    context,
+  )
+  f.host.submit = original
+  await f.reopen()
+  const duplicate = await f.service.feedback(input, context)
+  expect(duplicate).toMatchObject({
+    state: 'delivered',
+    images: input.images,
+    layoutIssues: saved.layoutIssues,
+  })
+  await expect(
+    f.service.feedback(
+      { ...input, images: [input.images[0], { ...input.images[1], noteId: 'layout-note' }] },
+      context,
+    ),
+  ).rejects.toThrow('conflicts')
+  const [metadata] = await f.service.feedbackList(artifact.id, context)
+  expect(metadata.images).toEqual([
+    { name: 'note.png', mime: 'image/png', noteId: 'picture-note' },
+    { name: 'general.png', mime: 'image/png' },
+  ])
+  expect((await f.service.feedbackRead(artifact.id, saved.id, context)).layoutIssues).toEqual(
+    saved.layoutIssues,
+  )
+  await expect(
+    f.service.feedback(
+      { ...input, requestId: 'bad-note', images: [{ ...input.images[0], noteId: 'missing' }] },
+      context,
+    ),
+  ).rejects.toThrow('noteId')
+  await expect(
+    f.service.feedback({ ...input, requestId: 'phantom', images: [input.images[1]] }, context),
+  ).rejects.toThrow('Blank notes')
+  const other = await f.service.publish({ title: 'Other', path: 'page.html' }, f.owner, context)
+  await expect(
+    f.service.feedback({ ...input, artifactId: other.id, requestId: 'cross-artifact' }, context),
+  ).rejects.toThrow('Unknown layout issue')
+})
+
+it('reports expanded feedback size as a definitive typed rejection before saving or admitting, without rejecting an earlier retained batch', async () => {
+  const f = await fixture()
+  const artifact = await f.service.publish(
+    { title: 'Large context', path: 'page.html' },
+    f.owner,
+    context,
+  )
+  const observed = await f.service.layoutPass(
+    {
+      artifactId: artifact.id,
+      contentHash: artifact.contentHash,
+      viewport: { width: 390, height: 844 },
+      complete: true,
+      findings: Array.from({ length: 50 }, (_, index) => ({
+        rule: 'clipped-control',
+        selector: `main > ${'div > '.repeat(330)}button#control-${index}`,
+        axis: 'vertical',
+        overflowPx: 10,
+      })),
+    },
+    context,
+  )
+  const input: FeedbackInput = {
+    artifactId: artifact.id,
+    requestId: 'expanded-size',
+    contentHash: artifact.contentHash,
+    recipientConversation: f.owner,
+    notes: Array.from({ length: 50 }, (_, index) => ({
+      id: `note-${index}`,
+      text: '\u0001'.repeat(4000),
+      ...(index < 15
+        ? { anchor: { kind: 'element' as const, selector: '#target', text: '\u0001'.repeat(2000) } }
+        : {}),
+      ...(index === 0 ? { layoutIssueIds: observed.issues.map((issue) => issue.id) } : {}),
+    })),
+    images: [
+      {
+        name: 'reference.png',
+        mime: 'image/png',
+        base64: Buffer.alloc(FEEDBACK_IMAGE_MAX_BYTES).toString('base64'),
+      },
+    ],
+  }
+  const normalized = feedbackInput(input)
+  expect(Buffer.byteLength(JSON.stringify(normalized))).toBeLessThan(FEEDBACK_MAX_JSON_BYTES)
+  expect(
+    Buffer.byteLength(JSON.stringify({ ...normalized, layoutIssues: observed.issues })),
+  ).toBeGreaterThan(FEEDBACK_MAX_JSON_BYTES)
+  let admitted = 0
+  f.host.submit = async () => {
+    admitted++
+    throw new Error('Unexpected admission')
+  }
+  const rejected = await f.service.feedback(input, context).catch((error: unknown) => error)
+  expect(rejected).toBeInstanceOf(FeedbackTooLargeError)
+  expect(rejected).toMatchObject({ code: 'feedback-too-large' })
+  expect(admitted).toBe(0)
+  expect(
+    (await f.opened().harness.snapshot(Registry, ROOT_CONVERSATION_ID, context))?.feedback ?? {},
+  ).toEqual({})
+  const id = digest(JSON.stringify([artifact.id, input.requestId]))
+  expect(
+    await f
+      .opened()
+      .harness.commit((tx) => tx.submissionByRequest(f.owner, `artifacts:${id}`), context),
+  ).toBeUndefined()
+  const storage = new ArtifactStorage(f.host.home)
+  await expect(lstat(join(storage.artifactPath(artifact.id), 'feedback'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  })
+  expect(() =>
+    feedbackInput({
+      ...input,
+      notes: input.notes.map((note, index) =>
+        index === 15 ? { ...note, anchor: input.notes[0].anchor } : note,
+      ),
+    }),
+  ).toThrow(FeedbackTooLargeError)
+  // An earlier save's immutable context wins over a newly expanded candidate for the same request.
+  const earlier = await storage.saveFeedback({
+    ...input,
+    id,
+    createdAt: 1,
+    routedTo: f.owner,
+    state: 'saved',
+  })
+  const reused = await storage.saveFeedback({ ...earlier, layoutIssues: observed.issues })
+  expect(reused).toEqual(earlier)
 })

@@ -66,8 +66,8 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       import {createRoot} from 'react-dom/client';
       import {ArtifactFrame} from '/.ultimate/extensions/native-artifacts/viewer.tsx';
       const root = createRoot(document.getElementById('root'));
-      window.received = []; window.statuses = []; window.errors = []; window.interactions = []; window.ready = 0;
-      window.props = {mode:'annotate',anchors:[],onTarget:a=>window.received.push(a),onStatuses:s=>window.statuses.push(s),onError:e=>window.errors.push(e),onInteracting:a=>window.interactions.push(a),onReady:()=>window.ready++};
+      window.received = []; window.statuses = []; window.errors = []; window.interactions = []; window.rects = []; window.passes = []; window.targetRects = []; window.ready = 0;
+      window.props = {mode:'annotate',anchors:[],onTarget:(a,r)=>{window.received.push(a);window.targetRects.push(r)},onRect:r=>window.rects.push(r),onDiagnostics:p=>window.passes.push(p),onStatuses:s=>window.statuses.push(s),onError:e=>window.errors.push(e),onInteracting:a=>window.interactions.push(a),onReady:()=>window.ready++};
       window.install = (doc, patch={}) => { Object.assign(window.props,patch); if(doc)window.props.document=doc; root.render(React.createElement(ArtifactFrame,window.props)); };
     `
           return undefined
@@ -133,6 +133,19 @@ it('captures element and cross-node text targets, validates stale boundaries, an
     await until(async () => await page.evaluate(() => (window as any).received.length === 1))
     const element = (await page.evaluate(() => (window as any).received[0])) as ArtifactAnchor
     expect(element).toMatchObject({ kind: 'element', text: 'A static link' })
+    expect(await page.evaluate(() => (window as any).targetRects[0].width)).toBeGreaterThan(0)
+    await until(
+      async () =>
+        await page.evaluate(
+          () =>
+            (window as any).passes.length > 0 &&
+            (window as any).rects.some((r: any) => r?.width > 0),
+        ),
+    )
+    expect(await page.evaluate(() => (window as any).passes[0].viewport)).toEqual({
+      width: 1000,
+      height: 700,
+    })
     expect(page.url()).toBe(origin + '/native-test')
     // A real native drag captures once at release; its following click cannot replace it with an element.
     const points = await child
@@ -189,6 +202,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
       const data = {
         type: 'target',
         channel,
+        rect: { x: 0, y: 0, width: 100, height: 20 },
         anchor: {
           kind: 'text',
           selector: 'p',
@@ -231,6 +245,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
             type: 'target',
             channel,
             anchor: { kind: 'text', selector: 'p', text: 'x'.repeat(2001) },
+            rect: { x: 0, y: 0, width: 100, height: 20 },
           },
           parentOrigin,
         )
@@ -239,6 +254,7 @@ it('captures element and cross-node text targets, validates stale boundaries, an
             type: 'target',
             channel: 'wrong',
             anchor: { kind: 'element', selector: 'p', text: 'forged' },
+            rect: { x: 0, y: 0, width: 100, height: 20 },
           },
           parentOrigin,
         )

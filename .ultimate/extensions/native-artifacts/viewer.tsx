@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArtifactAnchor } from '../artifacts/types.ts'
 import { decodeFrameMessage } from './bridge.ts'
-import type { CaptureMode, NativeDocument, TargetStatus } from './types.ts'
+import type {
+  CaptureMode,
+  LayoutDiagnostics,
+  NativeDocument,
+  RevealTarget,
+  TargetRect,
+  TargetStatus,
+} from './types.ts'
 
 export type ArtifactFrameProps = {
   document: NativeDocument
   mode: CaptureMode
   anchors: ArtifactAnchor[]
-  onTarget(anchor: ArtifactAnchor): void
+  onTarget(anchor: ArtifactAnchor, rect: TargetRect): void
+  selected?: ArtifactAnchor
+  reveal?: RevealTarget
+  onRect?(rect: TargetRect | null): void
+  onDiagnostics?(pass: LayoutDiagnostics): void
   onStatuses(statuses: TargetStatus[]): void
   onReady?(): void
   onError?(message: string): void
@@ -45,7 +56,11 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
       } else if (message.type === 'target') {
         if (current.mode !== 'annotate') return
         setNotice(message.anchor.kind === 'text' ? 'Text selection captured.' : 'Element captured.')
-        current.onTarget(message.anchor)
+        current.onTarget(message.anchor, message.rect)
+      } else if (message.type === 'rect') {
+        current.onRect?.(message.rect)
+      } else if (message.type === 'diagnostics') {
+        current.onDiagnostics?.(message.pass)
       } else if (message.type === 'interaction') {
         current.onInteracting?.(message.active && current.mode === 'annotate')
       } else if (message.type === 'statuses') {
@@ -64,8 +79,14 @@ export function ArtifactFrame(props: ArtifactFrameProps) {
   useEffect(() => {
     if (props.mode !== 'annotate') latest.current.onInteracting?.(false)
     if (readyChannel === channel)
-      post({ type: 'configure', mode: props.mode, anchors: props.anchors.slice(0, 200) })
-  }, [readyChannel, channel, props.mode, props.anchors, post])
+      post({
+        type: 'configure',
+        mode: props.mode,
+        anchors: props.anchors.slice(0, 200),
+        selected: props.selected,
+        reveal: props.reveal,
+      })
+  }, [readyChannel, channel, props.mode, props.anchors, props.selected, props.reveal, post])
   return (
     <div className="flex h-full min-h-0 flex-col">
       <iframe

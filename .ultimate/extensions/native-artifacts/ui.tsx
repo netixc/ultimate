@@ -1,5 +1,5 @@
 /** Native artifact review actions and tab-local drafts; nothing here claims durable draft storage. */
-import { useSyncExternalStore } from 'react'
+import { createContext, useSyncExternalStore } from 'react'
 import { actionRef } from '@/sdk'
 import type {
   Artifact,
@@ -9,8 +9,10 @@ import type {
   FeedbackSummary,
   FeedbackInput,
   ReferenceImage,
+  LayoutState,
+  LayoutPassInput,
 } from '../artifacts/types.ts'
-import type { NativeDocument } from './types.ts'
+import type { NativeDocument, TargetStatus } from './types.ts'
 
 export const List = actionRef<null, Artifact[]>('native-artifacts', 'list')
 export type NativeReadResult =
@@ -20,7 +22,10 @@ export const Read = actionRef<
   { id: string; parentOrigin: string; knownHash?: string },
   NativeReadResult
 >('native-artifacts', 'read')
-export const Feedback = actionRef<FeedbackInput, FeedbackBundle>('native-artifacts', 'feedback')
+export const Feedback = actionRef<
+  FeedbackInput,
+  FeedbackBundle | { rejected: 'too-large'; message: string }
+>('native-artifacts', 'feedback')
 export const FeedbackList = actionRef<{ artifactId: string }, FeedbackSummary[]>(
   'native-artifacts',
   'feedbackList',
@@ -30,19 +35,41 @@ export const FeedbackRead = actionRef<{ artifactId: string; id: string }, Feedba
   'feedbackRead',
 )
 
+export const LayoutRead = actionRef<{ artifactId: string }, LayoutState>(
+  'native-artifacts',
+  'layoutRead',
+)
+export const LayoutPass = actionRef<LayoutPassInput, LayoutState>('native-artifacts', 'layoutPass')
+export const LayoutDismiss = actionRef<
+  { artifactId: string; issueId: string; contentHash: string },
+  LayoutState
+>('native-artifacts', 'layoutDismiss')
+
 export type ReviewDraft = {
   contentHash: string
   recipient: string
   notes: ArtifactNote[]
   images: ReferenceImage[]
   readingImages?: boolean
+  readingNoteId?: string
   general: string
   editor: string
   anchor?: ArtifactAnchor
+  editorId?: string
+  selectedIssues?: string[]
   /** Retain the exact request across uncertain delivery and retries, even if the user keeps editing. */
   request?: FeedbackInput
   requestGeneral?: string
 }
+
+export type ReviewComposerValue = {
+  artifact: Artifact
+  draft: ReviewDraft
+  update: (change: (current: ReviewDraft) => ReviewDraft) => void
+  statuses: TargetStatus[]
+  onContinueNote: () => void
+}
+export const ReviewComposerContext = createContext<ReviewComposerValue | null>(null)
 
 // Surface switches unmount React. Keep unsent work in this tab, not shared shell state or a durable-sounding store.
 const drafts = new Map<string, ReviewDraft>()
@@ -57,6 +84,8 @@ export const hasDraft = (draft: ReviewDraft | undefined) =>
   (!!draft.general.trim() ||
     !!draft.editor.trim() ||
     !!draft.anchor ||
+    !!draft.editorId ||
+    !!draft.selectedIssues?.length ||
     draft.notes.length > 0 ||
     draft.images.length > 0 ||
     !!draft.readingImages ||

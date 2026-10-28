@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path'
 import {
   FEEDBACK_IMAGE_MAX_BYTES,
   FEEDBACK_MAX_JSON_BYTES,
+  FeedbackTooLargeError,
   MAX_ARTIFACT_BYTES,
   MAX_ARTIFACT_HTML_BYTES,
 } from './types.ts'
@@ -138,6 +139,16 @@ function imageBytes(base64: unknown) {
   if (!bytes.length || bytes.toString('base64') !== base64) throw new Error('Invalid image base64')
   return bytes
 }
+function layoutIssueIds(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > 50 ||
+    !value.every((id) => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)) ||
+    new Set(value).size !== value.length
+  )
+    throw new Error('Expected at most 50 unique layout issue ids per note')
+  return value
+}
 export function feedbackInput(value: unknown): FeedbackInput {
   const input = object(value)
   if (typeof input.contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.contentHash))
@@ -151,8 +162,14 @@ export function feedbackInput(value: unknown): FeedbackInput {
     const note = object(item)
     return {
       id: text(note.id, 'Note id', 128),
-      text: text(note.text, 'Note', 4000),
+      text:
+        typeof note.text === 'string' && note.text.length <= 4000
+          ? note.text
+          : text(note.text, 'Note', 4000),
       ...(note.anchor === undefined ? {} : { anchor: anchor(note.anchor) }),
+      ...(note.layoutIssueIds === undefined
+        ? {}
+        : { layoutIssueIds: layoutIssueIds(note.layoutIssueIds) }),
     }
   })
   if (new Set(notes.map((note) => note.id)).size !== notes.length)
@@ -167,8 +184,17 @@ export function feedbackInput(value: unknown): FeedbackInput {
       name: text(image.name, 'Image name', 200),
       mime: image.mime as FeedbackInput['images'][number]['mime'],
       base64: image.base64 as string,
+      ...(image.noteId === undefined ? {} : { noteId: text(image.noteId, 'Image note id', 128) }),
     }
   })
+  for (const image of images) {
+    if (image.noteId !== undefined && !notes.some((note) => note.id === image.noteId))
+      throw new Error('Reference image noteId must name a note in this batch')
+  }
+  for (const note of notes) {
+    if (!note.text.trim() && !images.some((image) => image.noteId === note.id))
+      throw new Error('Blank notes require an associated reference image')
+  }
   if (!notes.length && !images.length) throw new Error('Feedback needs notes or reference images')
   const result: FeedbackInput = {
     artifactId: artifactId(input.artifactId),
@@ -179,7 +205,9 @@ export function feedbackInput(value: unknown): FeedbackInput {
     images,
   }
   if (Buffer.byteLength(JSON.stringify(result)) > FEEDBACK_MAX_JSON_BYTES)
-    throw new Error('Feedback payload is too large; remove an image or shorten notes')
+    throw new FeedbackTooLargeError(
+      'Feedback payload is too large; remove an image or shorten notes',
+    )
   return result
 }
 
@@ -330,8 +358,19 @@ export class ArtifactStorage {
     }
   }
   async saveFeedback(bundle: FeedbackBundle) {
-    const paths = this.imagePaths(bundle)
     const target = this.feedbackPath(bundle.artifactId, bundle.id)
+    if (Buffer.byteLength(JSON.stringify(bundle)) > FEEDBACK_MAX_JSON_BYTES) {
+      const retained = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined
+        throw error
+      })
+      // An interrupted earlier save must reuse/compare its immutable bytes, never become a fresh rejection.
+      if (!retained)
+        throw new FeedbackTooLargeError(
+          'Feedback including observed layout context exceeds the JSON transport limit; shorten notes or remove an image',
+        )
+    }
+    const paths = this.imagePaths(bundle)
     await this.immutableFolder(target, async (folder) => {
       await this.writeSynced(join(folder, 'bundle.json'), JSON.stringify(bundle, null, 2))
       for (const [index, image] of bundle.images.entries())

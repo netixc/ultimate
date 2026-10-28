@@ -19,8 +19,26 @@ import { WorkspacesApi } from '../../../extensions/workspaces/api.ts'
 import { SubagentsApi } from '../../../extensions/subagents/api.ts'
 import { ArtifactsApi } from './api.ts'
 import type { ArtifactsService } from './api.ts'
-import { Publish, List, Read, Feedback, FeedbackList, FeedbackRead } from './refs.ts'
-import type { Artifact, FeedbackBundle, FeedbackSummary } from './types.ts'
+import {
+  Publish,
+  List,
+  Read,
+  Feedback,
+  FeedbackList,
+  FeedbackRead,
+  LayoutRead,
+  LayoutPass,
+  LayoutDismiss,
+} from './refs.ts'
+import type { Artifact, FeedbackBundle, FeedbackSummary, LayoutState } from './types.ts'
+import {
+  layoutPassInput,
+  layoutDismissInput,
+  layoutView,
+  observeLayout,
+  dismissLayout,
+  feedbackLayoutIssues,
+} from './layout.ts'
 import { ArtifactStorage, artifactId, digest, feedbackInput, publishInput } from './storage.ts'
 
 type FeedbackRecord = { bundle: FeedbackSummary; payloadHash: string; ownerConversation: number }
@@ -36,10 +54,19 @@ export const Registry = defineDoc<{
   checkpointWhen: () => false,
   initial: () => ({ artifacts: {}, feedback: {} }),
 })
-export const docs = [Registry]
-// Typed user-input admission is privileged: only the human review boundary can create feedback.
-export const userActions = ['feedback']
-export const sealedActions = ['feedback', 'feedbackRead']
+export const Layout = defineDoc<{ artifacts: Record<string, LayoutState> }>({
+  kind: 'artifacts.layout',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  checkpointWhen: () => false,
+  initial: () => ({ artifacts: {} }),
+})
+export const docs = [Registry, Layout]
+// Human feedback and real browser measurements must not be fabricated by agent actions.
+export const userActions = ['feedback', 'layoutPass', 'layoutDismiss']
+export const sealedActions = ['feedback', 'feedbackRead', 'layoutPass', 'layoutDismiss']
 
 async function source(tx: Tx, host: ExtensionHost, owner: number) {
   const id = owner as ConversationId
@@ -88,6 +115,8 @@ export function artifacts(
       artifacts: {},
       feedback: {},
     }
+  const layout = async (id: string, ctx: Context) =>
+    (await host.harness().snapshot(Layout, ROOT_CONVERSATION_ID, ctx))?.artifacts[id]
   async function hydrate(record: FeedbackRecord): Promise<FeedbackBundle> {
     const saved = await storage.readFeedback(record.bundle.artifactId, record.bundle.id)
     return { ...saved, ...record.bundle, images: saved.images }
@@ -128,13 +157,17 @@ export function artifacts(
             `Saved bundle and current delivery state: artifacts.feedbackRead({artifactId: ${JSON.stringify(bundle.artifactId)}, id: ${JSON.stringify(bundle.id)}}). Retained artifact: artifacts.read({id: ${JSON.stringify(bundle.artifactId)}}).`,
             ...bundle.notes.map(
               (note) =>
-                `Note ${note.id}: ${note.text}${note.anchor ? `\nTarget: ${JSON.stringify(note.anchor)}` : ''}`,
+                `Note ${note.id}: ${note.text}${note.anchor ? `\nTarget: ${JSON.stringify(note.anchor)}` : ''}${note.layoutIssueIds?.length ? `\nLayout issue references: ${note.layoutIssueIds.join(', ')}` : ''}`,
+            ),
+            ...(bundle.layoutIssues ?? []).map(
+              (issue) =>
+                `Saved server-observed layout context (not proof of repair): ${JSON.stringify(issue)}`,
             ),
             ...storage
               .imagePaths(bundle)
               .map(
                 (path, index) =>
-                  `Reference image ${index + 1} (${bundle.images[index].name}): ${path}`,
+                  `Reference image ${index + 1} (${bundle.images[index].name}; ${bundle.images[index].noteId === undefined ? 'general reference' : `for note ${bundle.images[index].noteId}`}): ${path}`,
               ),
           ].join('\n\n')
           submissionId = (
@@ -270,8 +303,14 @@ export function artifacts(
               !(await host.need(ConversationsApi).concludedIn(tx)).has(target),
           )
           const routedTo = active ? target : await host.need(SubagentsApi).standing('ultimate', ctx)
+          const issueIds = input.notes.flatMap((note) => note.layoutIssueIds ?? [])
+          const observed = feedbackLayoutIssues(
+            layoutView(await layout(input.artifactId, ctx), artifact.contentHash),
+            issueIds,
+          )
           const bundle = await storage.saveFeedback({
             ...input,
+            ...(observed.length ? { layoutIssues: observed } : {}),
             id,
             createdAt: Date.now(),
             routedTo,
@@ -279,7 +318,11 @@ export function artifacts(
           })
           const metadata: FeedbackSummary = {
             ...bundle,
-            images: bundle.images.map(({ name, mime }) => ({ name, mime })),
+            images: bundle.images.map(({ name, mime, noteId }) => ({
+              name,
+              mime,
+              ...(noteId === undefined ? {} : { noteId }),
+            })),
           }
           await commit(ctx, async (tx) => {
             ;(await tx.doc(Registry, ROOT_CONVERSATION_ID)).feedback[id] = {
@@ -301,6 +344,41 @@ export function artifacts(
           .toSorted((a, b) => b.bundle.createdAt - a.bundle.createdAt)
           .slice(0, 50)
           .map((record) => record.bundle)
+      }),
+    layoutRead: (id, ctx) =>
+      locked(async () => {
+        const artifact = await find(id, ctx)
+        return layoutView(await layout(id, ctx), artifact.contentHash)
+      }),
+    layoutPass: (raw, ctx) =>
+      locked(async () => {
+        const input = layoutPassInput(raw)
+        const artifact = await find(input.artifactId, ctx)
+        const state = observeLayout(
+          await layout(input.artifactId, ctx),
+          input,
+          artifact.contentHash,
+          Date.now(),
+        )
+        if (!state.stale)
+          await commit(ctx, async (tx) => {
+            ;(await tx.doc(Layout, ROOT_CONVERSATION_ID)).artifacts[input.artifactId] = state
+          })
+        return state
+      }),
+    layoutDismiss: (raw, ctx) =>
+      locked(async () => {
+        const input = layoutDismissInput(raw)
+        const artifact = await find(input.artifactId, ctx)
+        const state = dismissLayout(
+          await layout(input.artifactId, ctx),
+          input,
+          artifact.contentHash,
+        )
+        await commit(ctx, async (tx) => {
+          ;(await tx.doc(Layout, ROOT_CONVERSATION_ID)).artifacts[input.artifactId] = state
+        })
+        return state
       }),
     feedbackRead: (artifact, id, ctx) =>
       locked(async () => {
@@ -336,6 +414,15 @@ export const actions = {
   ),
   feedbackList: implementAction(FeedbackList, (args, { host }) =>
     host.need(ArtifactsApi).feedbackList(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
+  ),
+  layoutRead: implementAction(LayoutRead, (args, { host }) =>
+    host.need(ArtifactsApi).layoutRead(artifactId(field(args, 'artifactId')), BACKGROUND_CONTEXT),
+  ),
+  layoutPass: implementAction(LayoutPass, (args, { host }) =>
+    host.need(ArtifactsApi).layoutPass(layoutPassInput(args), BACKGROUND_CONTEXT),
+  ),
+  layoutDismiss: implementAction(LayoutDismiss, (args, { host }) =>
+    host.need(ArtifactsApi).layoutDismiss(layoutDismissInput(args), BACKGROUND_CONTEXT),
   ),
   feedbackRead: implementAction(FeedbackRead, (args, { host }) =>
     host
